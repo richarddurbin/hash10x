@@ -10,7 +10,7 @@
 		will work on fil == stdin
  * Exported functions: readSequence, writeSequence, seqConvert, readFastq, writeFastq
  * HISTORY:
- * Last edited: Jul 24 15:48 2018 (rd)
+ * Last edited: Jul 25 11:24 2018 (rd)
  * * Oct 22 17:30 2008 (rd): added desc to read/writeFastq
  * * Jul 29 22:42 2008 (rd): added writeFastq
  * * Oct 22 06:45 2006 (rd): added readFastq
@@ -427,8 +427,11 @@ int readMatrix (char *name, int *conv, int** *mat)
       return 0 ;
     }
     
-  while (!feof(fil) && *line == '#') /* comments */
-    fgets (line, 1023, fil) ;
+  while (!feof(fil) && *line == '#' && fgets (line, 1023, fil)) ; /* comments */
+  if (feof(fil) || ferror(fil))
+    { fprintf (stderr, "ERROR in readMatrix: empty file or read error\n") ;
+      return 0 ;
+    }
 
 				/* character set */
   p = line ; while (*p == ' ' || *p == '\t' || *p == '\n') ++p ;

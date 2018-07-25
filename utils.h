@@ -5,13 +5,14 @@
  * Description: includes standard system headers and own headers
  * Exported functions:
  * HISTORY:
- * Last edited: Jul 24 16:09 2018 (rd)
+ * Last edited: Jul 25 11:18 2018 (rd)
  * Created: Wed Jan  5 16:13:48 2011 (rd)
  *-------------------------------------------------------------------
  */
 
 #include <stdio.h>		/* FILE etc. */
 #include <stdlib.h>		/* malloc(), free(), ... notation */
+#include <stdint.h>		/* for standard size int types */
 #include <string.h>		/* memset() */
 #include <limits.h>		/* INT_MAX etc. */
 #include <assert.h>
@@ -31,13 +32,13 @@ const static I32 I32MAX = 0x7fffffff ;
 typedef int64_t I64 ;
 const static I64 I64MAX = 0x7fffffffffffffff ;
 
-typedef uint8_t U8 ;		/* good for MacOS; u_int8_t on at least some linux e.g. Ubuntu */
+typedef uint8_t U8 ;
 const static U8 U8MAX = 0xff ;
-typedef uint16_t U16 ;		/* as above */
+typedef uint16_t U16 ;
 const static U16 U16MAX = 0xffff ;
-typedef uint32_t U32 ;		/* as above */
+typedef uint32_t U32 ;
 const static U32 U32MAX = 0xffffffff ;
-typedef uint64_t U64 ;		/* as above */
+typedef uint64_t U64 ;
 const static U64 U64MAX = 0xffffffffffffffff ;
 #endif
 

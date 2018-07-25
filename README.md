@@ -15,9 +15,7 @@ make
 ```
 This should make two executables, hash10x (the main program) and fq2b, which is used to turn the initial fastq data set into a compact binary record-based format that can be sorted on key by [bsort](https://github.com/pelotoncycle/bsort) for import into hash10x.
 
-*Note 1: I define internal types U8, U16, U32, U64 in utils.h. MacOS and Linux differ in their base types uint8_t (MacOS, which I have developed on) or u_int8_t (Linux), so you may need to edit this section of utils.h to compile on some platforms.  I should work out how to deal with this automatically.*
-
-*Note 2: For real, vertebrate genome-sized data sets it is good to compile a multi-threaded version using OMP. This parallelizes the cluster command. To do this you need a -DOMP compiler option.  I haven't set this all up in the Makefile yet.*
+*Note: For real, vertebrate genome-sized data sets it is good to compile a multi-threaded version using OMP. This parallelizes the cluster command. To do this you need a -DOMP compiler option.  I haven't set this all up in the Makefile yet.*
 
 To run:
 ```
