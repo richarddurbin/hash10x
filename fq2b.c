@@ -5,7 +5,7 @@
  * Description: converts fastq to binary packed sequence. Can correct 10x barcodes.
  * Exported functions:
  * HISTORY:
- * Last edited: Mar 24 22:40 2018 (rd)
+ * Last edited: Jul 25 10:40 2018 (rd)
  * Created: Sun Mar 11 09:13:43 2018 (rd)
  *-------------------------------------------------------------------
  */
@@ -109,6 +109,7 @@ int main (int argc, char *argv[])
 {
   BOOL isCheckId = TRUE ;
   FILE *fout = stdout ;
+  BOOL isMismatchID = FALSE ;
 
   packInit () ;
   
@@ -147,7 +148,11 @@ int main (int argc, char *argv[])
       if (f2)
 	{ if (!gzReadFastq (f2, id2Buf, &idLen, s2Buf, q2Buf, &s2Len))
 	    die ("second fastq file terminated early at %d", n) ;
-	  assert (!strcmp (id1Buf, id2Buf)) ;
+	  if (!isMismatchID && strcmp (id1Buf, id2Buf))
+	    { fprintf (stderr, "proceeding despite paired read ids not matching, e.g. %s %s\n",
+		       id1Buf, id2Buf) ;
+	      isMismatchID = TRUE ;
+	    }
 	}
       if (table && !find10xBarcode (u1s)) continue ;
       if (f2) { seqPack (s2Buf, u2s, s2Len) ; qualPack (q2Buf, u2q, s2Len) ; }
