@@ -8,7 +8,7 @@
     can evaluate with crib built from external fasta files
  * Exported functions:
  * HISTORY:
- * Last edited: Jul 24 17:34 2018 (rd)
+ * Last edited: Jul 26 16:46 2018 (rd)
  * Created: Mon Mar  5 11:38:47 2018 (rd)
  *-------------------------------------------------------------------
  */
@@ -455,37 +455,46 @@ void cribBuild (FILE *f1, FILE *f2)
 }
 
 void printCrib (int i)
-{ if (cribType[i] && cribType[i] < CRIB_MUL)
-    printf (" %d:%s_%d.%d", i, cribTypeName[cribType[i]], crib[i].chr, crib[i].pos) ;
-  else
-    printf (" %d:%s", i, cribTypeName[cribType[i]]) ;
+{ printf (" %d", i) ;
+  if (crib) printf (":%s", cribTypeName[cribType[i]]) ;
+  if (crib && cribType[i] > CRIB_ERR && cribType[i] < CRIB_MUL)
+    printf ("_%d.%d", crib[i].chr, crib[i].pos) ;
   printf ("-%d", arr(hashCount, i, U32)) ;
-}
-
-void printCribShort (int i)
-{ if (cribType[i] && cribType[i] < CRIB_MUL)
-    printf (" %c%d.%d", cribTypeChar[cribType[i]], crib[i].chr, crib[i].pos) ;
-  else
-    printf (" %s", cribTypeName[cribType[i]]) ;
 }
 
 /************************************************************/
 
-Array sharedCodes (int x, int min, int max)
+static BOOL *hashWithinRange = 0 ;
+static int hashRangeMin = 0, hashRangeMax = 0 ;
+
+BOOL hashWithinRangeBuild (int min, int max)
+{ 
+  if (hashWithinRange && min == hashRangeMin && max == hashRangeMax) return FALSE ;
+  if (!hashWithinRange) hashWithinRange = new0 (arrayMax(hashCount), BOOL) ;
+  int i, n ;
+  for (i = 0 ; i < arrayMax(hashCount) ; ++i)
+    { n = arr(hashCount, i, U32) ;
+      if (n >= min && n < max) hashWithinRange[i] = TRUE ;
+    }
+  hashRangeMin = min ; hashRangeMax = max ;
+  return TRUE ;
+}
+
+Array hashNeighbours (int x)
 { /* return array of hashes that share between min and max codes with x */
+  /* abuse CodeHash structure for this array, storing the number of shared codes in ->read */
+  if (!hashWithinRange) die ("hashNeighbours() called without setting hashCountRange") ;
   Array ch = arrayCreate (1000, CodeHash) ;
   int i,j ;
   U32 xCount = arr(hashCount,x,U32) ;
-  printf ("shared codes for hash %d count %d", x, xCount) ;
   if (!xCount) return 0 ;
   for (i = 0 ; i < xCount ; ++i)
     { BarcodeBlock *b = arrp(barcodeBlocks, arr(hashCodes,x,U32*)[i], BarcodeBlock) ;
-      for (j = 0 ; j < b->nHash ; ++j)
-	{ U32 jCount = arr(hashCount,b->codeHash[j].hash,U32) ;
-	  if (jCount >= min && jCount < max) array(ch, arrayMax(ch), CodeHash) = b->codeHash[j] ;
-	}
+      CodeHash *c = b->codeHash ;
+      for (j = 0 ; j < b->nHash ; ++j, ++c)
+	if (c->hash != x && hashWithinRange[c->hash])
+	  array(ch, arrayMax(ch), CodeHash) = *c ;
     }
-  printf (" - %d level 2 codes\n", arrayMax(ch)) ;
   arraySort (ch, compareCodeHash) ;
   Array shared = arrayCreate (256, CodeHash) ; /* abuse structure esp. read field */
   CodeHash *last = arrayp (shared, 0, CodeHash) ;
@@ -500,33 +509,32 @@ Array sharedCodes (int x, int min, int max)
   return shared ;
 }
 
-void exploreHash (int x, int min, int max)
+void exploreHash (int x)
 {
-  Array shared = sharedCodes (x, min, max) ; if (!shared) return ;
+  Array shared = hashNeighbours (x) ; if (!shared) return ;
+  printf ("hashes sharing codes with ") ; printCrib (x) ; putchar ('\n') ;
   arraySort (shared, compareCodeRead) ;
   int i, count = 1, n = 0 ;
   CodeHash *d = arrp(shared, 0, CodeHash) ;
   for (i = 0 ; i < arrayMax(shared) ; ++i, ++d)
     if (d->read == count) ++n ;
     else
-      { printf ("  %d codes with count %d", n, count) ; 
-	if (n < 10)
-	  while (n) { printf ("  %8d %d", d[-n].hash, arr(hashCount, d[-n].hash, U32)) ; --n ; }
+      { printf ("  %d hashes sharing %d codes", n, count) ; 
+	if (n < 10) while (n) { printCrib (d[-n].hash) ; --n ; }
 	printf ("\n") ;
 	count = d->read ; n = 1 ;
       }
-  printf ("  %d codes with count %d", n, count) ;
-  if (n < 10)
-    while (n) { printf ("  %8d %d", d[-n].hash, arr(hashCount, d[-n].hash, U32)) ; --n ; }
+  printf ("  %d hashes sharing %d codes", n, count) ;
+  if (n < 10) while (n) { printCrib (d[-n].hash) ; --n ; }
   printf ("\n") ;
   
   arrayDestroy (shared) ;
 }
 
-void doubleShared (int x1, int x2, int min, int max)
+void doubleShared (int x1, int x2)
 {
-  Array sh1 = sharedCodes (x1, min, max) ; if (!sh1) return ;
-  Array sh2 = sharedCodes (x2, min, max) ; if (!sh2) { arrayDestroy (sh1) ; return ; }
+  Array sh1 = hashNeighbours (x1) ; if (!sh1) return ;
+  Array sh2 = hashNeighbours (x2) ; if (!sh2) { arrayDestroy (sh1) ; return ; }
 
   int i1 = 0, i2 = 0 ;
   CodeHash *c1 = arrp(sh1, 0, CodeHash), *c2 = arrp(sh2, 0, CodeHash) ;
@@ -543,30 +551,30 @@ void doubleShared (int x1, int x2, int min, int max)
   arrayDestroy (sh1) ; arrayDestroy (sh2) ;
 }
 
-/***************************************/
-
-static BOOL *hashWithinMinMax = 0 ;
-
-BOOL hashWithinMinMaxBuild (int min, int max)
-{ static int lastMin, lastMax ;
-  if (hashWithinMinMax && lastMin == min && lastMax == max) return FALSE ;
-  if (!hashWithinMinMax) hashWithinMinMax = new0 (arrayMax(hashCount), BOOL) ;
-  int i, n ;
-  for (i = 0 ; i < arrayMax(hashCount) ; ++i)
-    { n = arr(hashCount, i, U32) ;
-      if (n >= min && n < max) hashWithinMinMax[i] = TRUE ;
+void hashSummary (int hMin, int hMax)
+{
+  int x ;
+  for (x = hMin ; x < hMax ; ++x)
+    { printCrib (x) ;
+      if (hashWithinRange[x])
+	{ Array shared = hashNeighbours (x) ;
+	  arraySort (shared, compareCodeRead) ;
+	  CodeHash *ch = arrp(shared, arrayMax(shared)-1, CodeHash) ;
+	  printf (" max share %d with", ch->read) ; printCrib (ch->hash) ; 
+	  arrayDestroy (shared) ;
+	}
+      putchar ('\n') ;
     }
-  lastMin = min ; lastMax = max ;
-  return TRUE ;
 }
 
-/***********/
+/***************************************/
 
 U16 **goodHashes ;
 int *nGoodHashes ;
 
 void goodHashesBuild (void)
 {
+  if (!hashWithinRange) die ("cluster code called without setting hashCountRange") ;
   goodHashes = new (arrayMax(barcodeBlocks), U16*) ;
   nGoodHashes = new (arrayMax(barcodeBlocks), int) ;
   Array a = arrayCreate (4096, U16) ;
@@ -577,18 +585,19 @@ void goodHashesBuild (void)
       CodeHash *ch = cb->codeHash ;
       arrayMax(a) = 0 ;
       for (i = 0 ; i < cb->nHash ; ++i, ++ch)
-	if (hashWithinMinMax[ch->hash]) array(a, arrayMax(a), U16) = i ;
+	if (hashWithinRange[ch->hash]) array(a, arrayMax(a), U16) = i ;
       goodHashes[c] = new(arrayMax(a),U16) ;
       memcpy (goodHashes[c], arrp(a,0,U16), arrayMax(a)*sizeof(U16)) ;
       nGoodHashes[c] = arrayMax(a) ;
     }
 
-  printf ("made goodHashes arrays: ") ; timeUpdate (stdout) ;
+  printf ("made goodHashes arrays for hash range %d to %d : ", hashRangeMin, hashRangeMax) ;
+  timeUpdate (stdout) ;
 }
 
 /*************************/
 
-void codeClusterFind (int code, int min, int max) /* assign clusters to this barcode's hashes */
+void codeClusterFind (int code) /* assign clusters to this barcode's hashes */
 {
   BarcodeBlock *b = arrp(barcodeBlocks, code, BarcodeBlock), *c ;
   CodeHash *cb = b->codeHash, *cc ;
@@ -598,7 +607,6 @@ void codeClusterFind (int code, int min, int max) /* assign clusters to this bar
   U16 *g, *gi, *gc, *gcn ;
   Array clusterMin = arrayCreate (64, int) ;
 
-  if (hashWithinMinMaxBuild (min, max)) goodHashesBuild () ;
   int n = nGoodHashes[code] ;
   int *minShareCount = new (n, int) ;
 
@@ -816,18 +824,20 @@ void usage (int k, int w, int r, int B, int N, int chunkSize)
   fprintf (stderr, "   -c <file chunkSize in readPairs> [%d]\n", chunkSize) ;
   fprintf (stderr, "   -T : toggle to print tables for operations while this is set\n") ;
   fprintf (stderr, "   -V : toggle for verbose mode\n") ;
-  fprintf (stderr, "   readFQB <sorted fqb input file name>: must have this or readHash\n") ;
-  fprintf (stderr, "   readHash <hash input file name>\n") ;
-  fprintf (stderr, "   writeHash <hash output file name>\n") ;
-  fprintf (stderr, "   hashInfo <start> <end>: info for hashes in [start,end)\n") ;
-  fprintf (stderr, "   hashExplore <hash> <min> <max>: look for structure around hash\n") ;
-  fprintf (stderr, "   doubleShared <hash1> <hash2> <min> <max>: codes shared with both\n") ;
-  fprintf (stderr, "   cribBuild <genome1.fa> <genome2.fa>: match to genomic hashes\n") ;
-  fprintf (stderr, "   cluster <codeMin> <codeMax> <min> <max>: cluster reads for range of barcodes (1, 0 for all)\n") ;
-  fprintf (stderr, "   clusterReport <codeMin> <codeMax>\n") ;
-  fprintf (stderr, "   clusterSplit\n") ;
-  fprintf (stderr, "   hashStats <file name>\n") ;
-  fprintf (stderr, "   codeStats <file name>\n") ;
+  fprintf (stderr, "   --readFQB <sorted fqb input file name>: must have this or readHash\n") ;
+  fprintf (stderr, "   --readHash <hash input file name>\n") ;
+  fprintf (stderr, "   --writeHash <hash output file name>\n") ;
+  fprintf (stderr, "   --hashSummary <hMin> <hMax>: 1-line info about hashes in a range\n") ;
+  fprintf (stderr, "   --hashInfo <start> <end>: info for hashes in [start,end)\n") ;
+  fprintf (stderr, "   --hashExplore <hash>: look for structure around hash\n") ;
+  fprintf (stderr, "   --doubleShared <hash1> <hash2>: codes shared with both\n") ;
+  fprintf (stderr, "   --hashCountRange <min> <max>: set limits for hash counts for Explore, cluster etc.\n") ;
+  fprintf (stderr, "   --cribBuild <genome1.fa> <genome2.fa>: match to genomic hashes\n") ;
+  fprintf (stderr, "   --cluster <codeMin> <codeMax>: cluster reads for range of barcodes (1, 0 for all)\n") ;
+  fprintf (stderr, "   --clusterReport <codeMin> <codeMax>\n") ;
+  fprintf (stderr, "   --clusterSplit\n") ;
+  fprintf (stderr, "   --hashStats <file name>\n") ;
+  fprintf (stderr, "   --codeStats <file name>\n") ;
   exit (1) ;
 }
 
@@ -888,71 +898,67 @@ int main (int argc, char *argv[])
     else if (ARGMATCH("-c",2)) chunkSize = atoi(argv[-1]) ;
     else if (ARGMATCH("-T",1)) isPrintTables = !isPrintTables ;
     else if (ARGMATCH("-V",1)) isVerbose = !isVerbose ;
-    else if (ARGMATCH("readFQB",2))
+    else if (ARGMATCH("--readFQB",2))
       { if (!(f = fopen (argv[-1], "r"))) die ("failed to open fqb file %s", argv[-1]) ;
 	initialise (k, w, r, B) ;
         readFQB (f, N, chunkSize) ;
 	fillHashTable () ;
       }
-    else if (ARGMATCH("readHash",2))
+    else if (ARGMATCH("--readHash",2))
       { if (!(f = fopen (argv[-1], "r"))) die ("failed to open hash file %s", argv[-1]) ;
 	initialise (k, w, r, B) ;
 	readHashFile (f) ;
 	fillHashTable () ;
       }
-    else if (ARGMATCH("writeHash",2))
+    else if (ARGMATCH("--writeHash",2))
       { if (!(f = fopen (argv[-1], "w"))) die ("failed to open hash file %s", argv[-1]) ;
 	writeHashFile (f) ;
       }
-    else if (ARGMATCH("hashInfo",3))
-      { int i = atoi(argv[-2]), end = atoi(argv[-1]) ;
-	for (; i < end ; ++i)
-	  printf ("%8d\t%6lx\t%d\n", i, (long)arr(hashValue,i,U64), arr(hashCount,i,U32)) ;
-      }
-    else if (ARGMATCH("hashExplore",4))
-      { int x = atoi(argv[-3]), min = atoi(argv[-2]), max = atoi(argv[-1]) ;
-	exploreHash (x, min, max) ;
-      }
-    else if (ARGMATCH("doubleShared",5))
-      { int x1 = atoi(argv[-4]), x2 = atoi(argv[-3]), min = atoi(argv[-2]), max = atoi(argv[-1]) ;
-	doubleShared (x1, x2, min, max) ;
-      }
-    else if (ARGMATCH("cribBuild",3))
+    else if (ARGMATCH("--hashCountRange",3))
+      hashWithinRangeBuild (atoi(argv[-2]), atoi(argv[-1])) ;
+    else if (ARGMATCH("--hashInfo",3))
+      hashSummary (atoi(argv[-2]), atoi(argv[-1])) ;
+    else if (ARGMATCH("--hashExplore",2))
+      exploreHash (atoi(argv[-1])) ;
+    else if (ARGMATCH("--doubleShared",3))
+      doubleShared (atoi(argv[-2]), atoi(argv[-1])) ;
+    else if (ARGMATCH("--cribBuild",3))
       { FILE *f1, *f2 ;
 	if (!(f1 = fopen (argv[-2], "r"))) die ("failed to open .fa file %s", argv[-2]) ;
 	if (!(f2 = fopen (argv[-1], "r"))) die ("failed to open .fa file %s", argv[-1]) ;
 	cribBuild (f1, f2) ;
       }
-    else if (ARGMATCH("cluster",5))
-      { int code, codeMin = atoi(argv[-4]), codeMax = atoi(argv[-3]) ;
+    else if (ARGMATCH("--cluster",3))
+      { int code, codeMin = atoi(argv[-2]), codeMax = atoi(argv[-1]) ;
 	if (!codeMax) codeMax = arrayMax(barcodeBlocks) ;
-	int min = atoi(argv[-2]), max = atoi(argv[-1]) ;
+	goodHashesBuild () ;
 #ifdef OMP
 #pragma omp parallel for
 #endif
 	for (code = codeMin ; code < codeMax ; ++code)
-	  { codeClusterFind (code, min, max) ;
+	  { codeClusterFind (code) ;
 	    codeClusterReadMerge (code) ;
 	  }
 	printf ("clustered codes %d to %d\n", codeMin, codeMax) ;
 	timeUpdate (stdout) ;
       }
-    else if (ARGMATCH("clusterReport",3))
+    else if (ARGMATCH("--clusterReport",3))
       { int code, codeMin = atoi(argv[-2]), codeMax = atoi(argv[-1]) ;
 	if (!codeMax) codeMax = arrayMax(barcodeBlocks) ;
 	codeClusterReport (codeMin, codeMax) ;
       }
-    else if (ARGMATCH("clusterSplit",1))
+    else if (ARGMATCH("--clusterSplit",1))
       clusterSplitCodes () ;
-    else if (ARGMATCH("hashStats",2))
+    else if (ARGMATCH("--hashStats",2))
       { if (!(f = fopen (argv[-1], "w"))) die ("failed to open hash stats file %s", argv[-1]) ;
 	hashCountHist (f) ;
       }
-    else if (ARGMATCH("codeStats",2))
+    else if (ARGMATCH("--codeStats",2))
       { if (!(f = fopen (argv[-1], "w"))) die ("failed to open code stats file %s", argv[-1]) ;
 	codeSizeHist (f) ;
       }
-    else die ("unknown option %s; run without arguments for usage", *argv) ;
+    else if (**argv == '-') die ("unknown option/command %s; run without arguments for usage", *argv) ;
+    else die ("command line error: option/command %s does not start with '-'; run without arguments for usage", *argv) ;
 
   printf ("total resources used: ") ; timeTotal (stdout) ;
 }

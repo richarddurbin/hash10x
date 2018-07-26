@@ -24,9 +24,9 @@ fq2b -10x goodcodes -o L2.fqb DATA_S1_L002_R1_001.fastq.gz DATA_S1_L002_R2_001.f
 etc.
 cat L*.fqb > DATA.fqb           // make binary file packing 4 bases per byte, 2*(40 bytes sequence + 20 bytes 1-bit qual)
 bsort -k 4 -r 120 DATA.fqb      // sort 120 byte binary records based on first 4 bytes (16 bases) as key
-hash10x readFQB DATA.fqb writeHash DATA.hash    // construct minhashes and save data structures in binary .hash format
-hash10x readHash DATA.hash hashStats DATA.hashStats codeStats DATA.codeStats    // some histograms and summary stats
-hash10x readHash DATA.hash cluster 1 0 30 100 clusterSplit writeHash DATA.30-100.hash
+hash10x --readFQB DATA.fqb --writeHash DATA.hash    // construct minhashes and save data structures in binary .hash format
+hash10x --readHash DATA.hash --hashStats DATA.hashStats --codeStats DATA.codeStats    // some histograms and summary stats
+hash10x --readHash DATA.hash --hashCountRange 30 100 --cluster 1 0 --clusterSplit --writeHash DATA.30-100.hash
 // cluster hashes with depth between 30 and 100 into candidate molecules, map these to new "barcodes" and save
 ```
 Entering just `hash10x` without arguments lists possible commands.  Any sequence of commands with their arguments can be chained within a single invocation of hash10x.
@@ -46,9 +46,9 @@ fq2b -10x goodcodes -o L1.fqb yeast_S1_L001_R1_001.fastq.gz yeast_S1_L001_R2_001
 fq2b -10x goodcodes -o L2.fqb yeast_S1_L002_R1_001.fastq.gz yeast_S1_L002_R2_001.fastq.gz
 cat L1.fqb L2.fqb > yeast.fqb
 bsort -k 4 -r 120 yeast.fqb
-hash10x -B 23 readFQB yeast.fqb writeHash yeast.hash
-hash10x -B 23 readHash yeast.hash cluster 1 10 30 100 cribBuild S288c.fa SK1.fa clusterReport 1 10 // clusters codes 1..10
-hash10x -B 23 readHash yeast.hash cluster 1 0 30 100 codeStats yeast.cluster30-100.codeStats writeHash yeast.30-100.hash
+hash10x -B 23 --readFQB yeast.fqb --writeHash yeast.hash
+hash10x -B 23 --readHash yeast.hash --hashCountRange 30 100 --cluster 1 10 --cribBuild S288c.fa SK1.fa --clusterReport 1 10 // clusters codes 1..10
+hash10x -B 23 --readHash yeast.hash --hashCountRange 30 100 --cluster 1 0 --codeStats yeast.cluster30-100.codeStats --writeHash yeast.30-100.hash
 ```
 This generates 2.5M read pairs (151+151bp) over ~10k barcodes, each with 10-20 ~50kb molecules, for an ~60x average depth data set.  Most hash10x operations for this case take seconds, with the clustering taking around 5 minutes single threaded on a MacBook Pro 2.5 GHz Intel Core i7.
 
@@ -59,7 +59,7 @@ I could clean up the generation of goodcodes so as to work from a binary file, w
 fq2b -o L1.fqb yeast_S1_L001_R1_001.fastq.gz yeast_S1_L001_R2_001.fastq.gz
 fq2b -o L2.fqb yeast_S1_L002_R1_001.fastq.gz yeast_S1_L002_R2_001.fastq.gz
 cat L1.fqb L2.fqb > yeast-raw.fqb
-fq2b -10x 100 -o yeast.fqb yeast.fqb  // find barcodes present at least 100 times and fix to them, printing out stats
+fq2b -10xThresh 100 -o yeast.fqb yeast.fqb  // find barcodes present at least 100 times and fix to them, printing out stats
 ```
 
 ## Background
