@@ -20,9 +20,9 @@ minhash.o: minhash.h
 ### programs
 
 fq2b: fq2b.c $(UTILS_OBJS)
-	$(CC) $^ -o $@ -lz
+	$(CC) $(CFLAGS) $^ -o $@ -lz
 
 hash10x: hash10x.c readseq.o minhash.o $(UTILS_OBJS)
-	$(CC) $^ -o $@ -lm
+	$(CC) $(CFLAGS) $^ -o $@ -lm
 
 ### end of file

@@ -8,7 +8,7 @@
     can evaluate with crib built from external fasta files
  * Exported functions:
  * HISTORY:
- * Last edited: Jul 26 16:46 2018 (rd)
+ * Last edited: Jul 26 22:26 2018 (rd)
  * Created: Mon Mar  5 11:38:47 2018 (rd)
  *-------------------------------------------------------------------
  */
@@ -68,6 +68,7 @@ Array barcodeBlocks ;		/* one BarcodeBlock per barcode */
 
 BOOL isPrintTables = 0 ;
 BOOL isVerbose = 0 ;
+int numThreads = 1 ;		/* default to serial - reset  */
 
 /********************************************/
 
@@ -174,7 +175,6 @@ void readFQB (FILE *f, int N, int chunkSize)
       if (N && (nReads + thisChunk > N)) { thisChunk = N - nReads ; }
       int nRec = fread (u, 120, thisChunk, f) ;
       if (!nRec) { if (feof (f)) break ; else die ("file read problem") ; } /* loop exit here */
-      nReads += nRec ;
       
       int i ;
       if (!barcode) barcode = u[0] ; /* needed to start barcode matching */
@@ -186,6 +186,8 @@ void readFQB (FILE *f, int N, int chunkSize)
 	    b = arrayp(barcodeBlocks, arrayMax(barcodeBlocks), BarcodeBlock) ; b->nRead = 1 ;
 	    barcode = u[30*i] ; uStart = &u[30*i] ;
 	  }
+
+      nReads += nRec ;
     }
   fclose (f) ;
 
@@ -822,6 +824,7 @@ void usage (int k, int w, int r, int B, int N, int chunkSize)
   fprintf (stderr, "   -B <hash index table bitcount> [%d]\n", B) ;
   fprintf (stderr, "   -N <num records to read: 0 for all> [%d]\n", N) ;
   fprintf (stderr, "   -c <file chunkSize in readPairs> [%d]\n", chunkSize) ;
+  fprintf (stderr, "   -t : number of threads for parallel ops [%d]\n", numThreads) ;
   fprintf (stderr, "   -T : toggle to print tables for operations while this is set\n") ;
   fprintf (stderr, "   -V : toggle for verbose mode\n") ;
   fprintf (stderr, "   --readFQB <sorted fqb input file name>: must have this or readHash\n") ;
@@ -874,11 +877,13 @@ int main (int argc, char *argv[])
   int B = 28 ;
   int N = 0 ;
   int chunkSize = 100000 ;
+#ifdef OMP
+  numThreads = omp_get_max_threads () ;
+  omp_set_num_threads (numThreads) ;
+#endif
+  
   if (!argc) usage (k, w, r, B, N, chunkSize) ;
 
-  FILE *f ;
-
-  
 #ifdef SIZES
   printf ("sizeof BarcodeBlock is %d\n", sizeof(BarcodeBlock)) ;
   printf ("sizeof CodeHash is %d\n", sizeof(CodeHash)) ;
@@ -888,7 +893,7 @@ int main (int argc, char *argv[])
   barcodeBlocks = arrayCreate (1200, BarcodeBlock) ;
 
 #define ARGMATCH(x,n)	(!strcmp (*argv, x) && argc >= n && (argc -= n, argv += n))
-  
+  FILE *f ;  
   while (argc)
     if (ARGMATCH("-k",2)) k = atoi(argv[-1]) ;
     else if (ARGMATCH("-w",2)) w = atoi(argv[-1]) ;
@@ -896,6 +901,19 @@ int main (int argc, char *argv[])
     else if (ARGMATCH("-B",2)) B = atoi(argv[-1]) ;
     else if (ARGMATCH("-N",2)) N = atoi(argv[-1]) ;
     else if (ARGMATCH("-c",2)) chunkSize = atoi(argv[-1]) ;
+    else if (ARGMATCH("-t",1))
+      {
+#ifdef OMP
+	numThreads = atoi(argv[-1]) ;
+	if (numThreads > omp_get_max_threads ())
+	  { numThreads = omp_get_max_threads () ;
+	    fprintf (stderr, "setting number of threads to maximum possible %d\n", numThreads) ;
+	  }
+	omp_set_num_threads (numThreads) ;
+#else
+	fprintf (stderr, "can't set thread number - not compiled with OMP\n") ;
+#endif
+      }
     else if (ARGMATCH("-T",1)) isPrintTables = !isPrintTables ;
     else if (ARGMATCH("-V",1)) isVerbose = !isVerbose ;
     else if (ARGMATCH("--readFQB",2))
