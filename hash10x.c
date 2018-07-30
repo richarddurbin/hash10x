@@ -8,7 +8,7 @@
     can evaluate with crib built from external fasta files
  * Exported functions:
  * HISTORY:
- * Last edited: Jul 30 11:54 2018 (rd)
+ * Last edited: Jul 30 13:00 2018 (rd)
  * Created: Mon Mar  5 11:38:47 2018 (rd)
  *-------------------------------------------------------------------
  */
@@ -572,8 +572,8 @@ void hashInfo (int hMin, int hMax, int hIncrement)
 
 /***************************************/
 
-U16 **goodHashes ;
-int *nGoodHashes ;
+U16 **goodHashes = 0 ;
+int *nGoodHashes = 0 ;
 
 void goodHashesBuild (void)
 {
@@ -599,7 +599,8 @@ void goodHashesBuild (void)
       nGoodHashes[c] = arrayMax(a) ;
     }
 
-  printf ("  made goodHashes arrays for hash range %d to %d : ", hashRangeMin, hashRangeMax) ;
+  printf ("  made goodHashes arrays for hash range %d to %d\n  ", hashRangeMin, hashRangeMax) ;
+  timeUpdate (stdout) ; fflush (stdout) ;
 }
 
 /*************************/
@@ -619,6 +620,7 @@ void codeClusterFind (int code) /* assign clusters to this barcode's hashes */
 
   b->nCluster = 0 ;
   b->pointToMin = 0.0 ;
+  int nClustered = 0 ;
   for (i = 1 ; i < n ; ++i)
     { x = b->codeHash[goodHashes[code][i]].hash ;
       nc = arr(hashCount, x, U32) ;
@@ -654,23 +656,24 @@ void codeClusterFind (int code) /* assign clusters to this barcode's hashes */
 	{ CodeHash *ch = &b->codeHash[g[msBest]] ;
 	  if (!ch->cluster)	/* create a new cluster */
 	    { if (++b->nCluster > U8MAX) /* abandon this clustering */
-		{ b->nCluster = 0 ;
+		{ b->nCluster = 0 ; nClustered = 0 ;
 		  for (j = 0 ; j < i ; ++j) b->codeHash[g[j]].cluster = 0 ;
 		  printf ("    code %d with %d good hashes has too many clusters\n",
 			  code, nGoodHashes[code]) ;
 		  break ;
 		}
-	      ch->cluster = b->nCluster ;
+	      ch->cluster = b->nCluster ; ++nClustered ;
 	      array(clusterMin,b->nCluster,int) = msBest ;
 	    }
-	  b->codeHash[g[i]].cluster = ch->cluster ;
+	  b->codeHash[g[i]].cluster = ch->cluster ; ++nClustered ;
 	  b->pointToMin += minShareCount[arr(clusterMin,ch->cluster,int)] / (double)msTot ;
 	}
     }
   free (minShare) ;
   free (minShareCount) ;
-  if (isVerbose) { printf ("  clustered code %d with %d good hashes into %d raw clusters",
-			   code, nGoodHashes[code], b->nCluster) ; fflush (stdout) ; }
+  if (isVerbose)
+    printf ("  clustered code %d with %d hashes, %d good hashes, of which %d cluster into %d raw",
+	    code, b->nHash, nGoodHashes[code], nClustered, b->nCluster) ;
 }
 
 void codeClusterReadMerge (int code)
@@ -703,7 +706,7 @@ void codeClusterReadMerge (int code)
 
   free (readMap) ; free(trueCluster) ; free(deadCluster) ;
   if (isVerbose)
-    { printf (" reducing to %d merged clusters\n", deadCluster[b->nCluster]) ; fflush (stdout) ; }
+    { printf (" then %d merged clusters\n", deadCluster[b->nCluster]) ; fflush (stdout) ; }
 }
 
 void codeClusterReport (int codeMin, int codeMax)
@@ -977,7 +980,7 @@ int main (int argc, char *argv[])
     else if (ARGMATCH("--cluster",3))
       { int code, codeMin = atoi(argv[-2]), codeMax = atoi(argv[-1]) ;
 	if (!codeMax) codeMax = arrayMax(barcodeBlocks) ;
-	goodHashesBuild () ;
+	if (!goodHashes) goodHashesBuild () ;
 #ifdef OMP
 #pragma omp parallel for
 #endif
