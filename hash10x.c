@@ -8,7 +8,7 @@
     can evaluate with crib built from external fasta files
  * Exported functions:
  * HISTORY:
- * Last edited: Jul 29 10:28 2018 (rd)
+ * Last edited: Jul 30 11:54 2018 (rd)
  * Created: Mon Mar  5 11:38:47 2018 (rd)
  *-------------------------------------------------------------------
  */
@@ -585,6 +585,11 @@ void goodHashesBuild (void)
   
   for (c = 0 ; c < arrayMax(barcodeBlocks) ; ++c)
     { BarcodeBlock *cb = arrp(barcodeBlocks, c, BarcodeBlock) ;
+      if (cb->nHash > U16MAX)
+	{ nGoodHashes[c] = 0 ; goodHashes[c] = new(1,U16) ;
+	  printf ("    ignoring barcode %d - too many hashes %d > %d\n", c, cb->nHash, U16MAX) ;
+	  continue ;
+	}
       CodeHash *ch = cb->codeHash ;
       arrayMax(a) = 0 ;
       for (i = 0 ; i < cb->nHash ; ++i, ++ch)
@@ -609,7 +614,7 @@ void codeClusterFind (int code) /* assign clusters to this barcode's hashes */
   U16 *g, *gi, *gc, *gcn ;
   Array clusterMin = arrayCreate (64, int) ;
 
-  int n = nGoodHashes[code] ;
+  int n = nGoodHashes[code] ; if (!n) return ;
   int *minShareCount = new (n, int) ;
 
   b->nCluster = 0 ;
@@ -622,6 +627,7 @@ void codeClusterFind (int code) /* assign clusters to this barcode's hashes */
       for (j = 0 ; j < nc ; ++j)
 	{ int cj = arr(hashCodes, x, U32*)[j] ;
 	  if (cj == code) continue ;
+	  if (!nGoodHashes[cj]) return ;
 	  if (!minShare[cj])
 	    { minShare[cj] = i + 1 ; /* default value; +1 to distinguish from 0 */
 	      g = goodHashes[code] ; gi = &g[i] ; gc = goodHashes[cj] ;
@@ -646,8 +652,15 @@ void codeClusterFind (int code) /* assign clusters to this barcode's hashes */
 	}
       if (msMax > 5)
 	{ CodeHash *ch = &b->codeHash[g[msBest]] ;
-	  if (!ch->cluster)
-	    { ch->cluster = ++b->nCluster ;
+	  if (!ch->cluster)	/* create a new cluster */
+	    { if (++b->nCluster > U8MAX) /* abandon this clustering */
+		{ b->nCluster = 0 ;
+		  for (j = 0 ; j < i ; ++j) b->codeHash[g[j]].cluster = 0 ;
+		  printf ("    code %d with %d good hashes has too many clusters\n",
+			  code, nGoodHashes[code]) ;
+		  break ;
+		}
+	      ch->cluster = b->nCluster ;
 	      array(clusterMin,b->nCluster,int) = msBest ;
 	    }
 	  b->codeHash[g[i]].cluster = ch->cluster ;
@@ -656,13 +669,14 @@ void codeClusterFind (int code) /* assign clusters to this barcode's hashes */
     }
   free (minShare) ;
   free (minShareCount) ;
-  if (isVerbose && !(code % 1000))
-    { fprintf (stderr, "clustered code %d\n", code) ; fflush (stderr) ; }
+  if (isVerbose) { printf ("  clustered code %d with %d good hashes into %d raw clusters",
+			   code, nGoodHashes[code], b->nCluster) ; fflush (stdout) ; }
 }
 
 void codeClusterReadMerge (int code)
 {
   BarcodeBlock *b = arrp(barcodeBlocks, code, BarcodeBlock) ;
+  if (!b->nCluster) return ;	/* nothing to do */
   int i, j ;
   int *readMap = new0 (b->nRead, int), *trueCluster = new (b->nCluster+1, int) ;
   int *deadCluster = new0 (b->nCluster+1, int) ;
@@ -684,13 +698,12 @@ void codeClusterReadMerge (int code)
   /* now compactify trueCluster, reusing deadCluster[] for the map removing dead indices */
   for (j = 1 ; j <= b->nCluster ; ++j) deadCluster[j] = deadCluster[j-1] + 1 - deadCluster[j] ;
   for (j = 1 ; j <= b->nCluster ; ++j) trueCluster[j] = deadCluster[trueCluster[j]] ;
-  if (isVerbose)
-    printf ("  compressing %d raw clusters for code %d to %d true clusters\n",
-	    b->nCluster, code, deadCluster[b->nCluster]) ;
   b->nCluster = deadCluster[b->nCluster] ;
   for (i = 0 ; i < b->nHash ; ++i) b->codeHash[i].cluster = trueCluster[b->codeHash[i].cluster] ;
 
   free (readMap) ; free(trueCluster) ; free(deadCluster) ;
+  if (isVerbose)
+    { printf (" reducing to %d merged clusters\n", deadCluster[b->nCluster]) ; fflush (stdout) ; }
 }
 
 void codeClusterReport (int codeMin, int codeMax)
@@ -1025,10 +1038,19 @@ int main (int argc, char *argv[])
 
 /*************** end of file ***************/
 
+#include "hash.h"
+
 void exploreHash2 (int x)
 {
-  Array hashNeigh1 = hashNeighbours (x) ; if (!hashNeigh1) return ;
-  printf ("  %d hashes sharing codes with %s\n", arrayMax(hashNeigh1), cribText (x)) ;
+  Array hash1 = hashNeighbours (x) ; if (!hash1) return ;
+  printf ("  %d hashes sharing codes with %s\n", arrayMax(hash1), cribText (x)) ;
+
+  Array code1Count = arrayCreate (1024, U32) ;
+  HASH code1Hash = hashCreate (1024) ;
+  int i, j ;
+  for (i = 0 ; i < arrayMax(hash1) ; ++i)
+    if (arrp(hash1,i,CodeHash)->read >= 5)
+      { for (j = 0 ; j < 27 ; ++j) ; }
   
-  arrayDestroy (hashNeigh1) ;
+  arrayDestroy (hash1) ; arrayDestroy (code1Count) ; hashDestroy (hash1) ;
 }

@@ -1,6 +1,8 @@
 # makefile for hash10x, developed on Richard's Mac.
 
-CFLAGS= -g -O3
+CFLAGS= -O3
+#CFLAGS= -g				# for debugging
+#CFLAGS= -03 -DOMP -fopenmp		# for OMP parallelisation - doesn't compile on Mac
 
 all: fq2b hash10x
 

@@ -5,7 +5,7 @@
  * Description: includes standard system headers and own headers
  * Exported functions:
  * HISTORY:
- * Last edited: Jul 25 11:18 2018 (rd)
+ * Last edited: Jul 30 11:40 2018 (rd)
  * Created: Wed Jan  5 16:13:48 2011 (rd)
  *-------------------------------------------------------------------
  */
@@ -20,8 +20,8 @@
 #ifndef UTILS_DEFINED
 #define UTILS_DEFINED
 typedef char BOOL ;
-const static BOOL TRUE = 1 ;
-const static BOOL FALSE = 0 ;
+#define TRUE 1
+#define FALSE 0
 
 typedef int8_t I8 ;
 const static I8 I8MAX = 0x7f ;
