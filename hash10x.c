@@ -8,7 +8,7 @@
     can evaluate with crib built from external fasta files
  * Exported functions:
  * HISTORY:
- * Last edited: Jul 30 13:00 2018 (rd)
+ * Last edited: Jul 30 18:45 2018 (rd)
  * Created: Mon Mar  5 11:38:47 2018 (rd)
  *-------------------------------------------------------------------
  */
@@ -19,6 +19,16 @@
 #ifdef OMP
 #include <omp.h>
 #endif
+
+struct {
+  int k ;
+  int w ;
+  int r ;
+  int B ;
+  int N ;
+  int chunkSize ;
+  int clusterThreshold ;
+} params ;
 
 typedef struct {
   U32 hash ;			/* actually the hash index, not the original hash */
@@ -605,7 +615,7 @@ void goodHashesBuild (void)
 
 /*************************/
 
-void codeClusterFind (int code) /* assign clusters to this barcode's hashes */
+void codeClusterFind (int code, int clusterThreshold) /* clusters this barcode's good hashes */
 {
   BarcodeBlock *b = arrp(barcodeBlocks, code, BarcodeBlock), *c ;
   CodeHash *cb = b->codeHash, *cc ;
@@ -618,6 +628,8 @@ void codeClusterFind (int code) /* assign clusters to this barcode's hashes */
   int n = nGoodHashes[code] ; if (!n) return ;
   int *minShareCount = new (n, int) ;
 
+  for (i = 0 ; i < n ; ++i) b->codeHash[goodHashes[code][i]].cluster = 0 ; /* wipe existing */
+
   b->nCluster = 0 ;
   b->pointToMin = 0.0 ;
   int nClustered = 0 ;
@@ -628,8 +640,7 @@ void codeClusterFind (int code) /* assign clusters to this barcode's hashes */
 					       
       for (j = 0 ; j < nc ; ++j)
 	{ int cj = arr(hashCodes, x, U32*)[j] ;
-	  if (cj == code) continue ;
-	  if (!nGoodHashes[cj]) return ;
+	  if (cj == code || !nGoodHashes[cj]) continue ;
 	  if (!minShare[cj])
 	    { minShare[cj] = i + 1 ; /* default value; +1 to distinguish from 0 */
 	      g = goodHashes[code] ; gi = &g[i] ; gc = goodHashes[cj] ;
@@ -652,7 +663,7 @@ void codeClusterFind (int code) /* assign clusters to this barcode's hashes */
 	{ if (minShareCount[j] > msMax)  { msBest = j ; msMax = minShareCount[j] ; }
 	  msTot += minShareCount[j] ;
 	}
-      if (msMax > 5)
+      if (msMax >= clusterThreshold)
 	{ CodeHash *ch = &b->codeHash[g[msBest]] ;
 	  if (!ch->cluster)	/* create a new cluster */
 	    { if (++b->nCluster > U8MAX) /* abandon this clustering */
@@ -672,8 +683,13 @@ void codeClusterFind (int code) /* assign clusters to this barcode's hashes */
   free (minShare) ;
   free (minShareCount) ;
   if (isVerbose)
-    printf ("  clustered code %d with %d hashes, %d good hashes, of which %d cluster into %d raw",
-	    code, b->nHash, nGoodHashes[code], nClustered, b->nCluster) ;
+    { if (b->nCluster)
+	printf ("  code %d with %d hashes, %d good hashes, of which %d cluster into %d raw",
+		code, b->nHash, nGoodHashes[code], nClustered, b->nCluster) ;
+      else
+	printf ("  code %d with %d hashes, %d good hashes, 0 clusters\n",
+		code, b->nHash, nGoodHashes[code]) ;
+    }
 }
 
 void codeClusterReadMerge (int code)
@@ -705,61 +721,82 @@ void codeClusterReadMerge (int code)
   for (i = 0 ; i < b->nHash ; ++i) b->codeHash[i].cluster = trueCluster[b->codeHash[i].cluster] ;
 
   free (readMap) ; free(trueCluster) ; free(deadCluster) ;
-  if (isVerbose)
-    { printf (" then %d merged clusters\n", deadCluster[b->nCluster]) ; fflush (stdout) ; }
+  if (isVerbose) { printf (" then %d merged clusters\n", b->nCluster) ; fflush (stdout) ; }
 }
 
 void codeClusterReport (int codeMin, int codeMax)
 {
-  if (!crib) { fprintf (stderr, "  codeClusterReport() requires a crib\n") ; return ;}
   int code ;
   typedef struct {
+    int i ;
     int n ;
+    int nRead ;
     int nt[5] ;
     I16 chr ;
     U16 pMin, pMax ;
     int nBad ;
+    int bad ;			/* point to bad hash */
   } ReportInfo ;
-  Array a = arrayCreate (1024, ReportInfo) ;
+  Array info = arrayCreate (256, ReportInfo) ;
+  Array readClus = arrayCreate (1024, int) ;
+  Array badLink = arrayCreate (8192, int) ;
   ReportInfo *r ;
-  int i ;
+  int i, c ;
   U64 totalGoodHash = 0 ;
   double totalPointToMin = 0.0 ;
 
   for (code = codeMin ; code < codeMax ; ++code)
     { BarcodeBlock *b = arrp(barcodeBlocks, code, BarcodeBlock) ;
-      arrayReCreate (a, b->nCluster+1, ReportInfo) ;
+      arrayReCreate (info, b->nCluster+1, ReportInfo) ;
+      arrayReCreate (readClus, b->nRead, int) ;
+      arrayReCreate (badLink, b->nHash, int) ;
+      int nClusHash = 0 ;
       for (i = 0 ; i < b->nHash ; ++i)
-	{ if (!b->codeHash[i].cluster) continue ;
-	  r = arrp(a, b->codeHash[i].cluster, ReportInfo) ;
+	{ if (!(c = b->codeHash[i].cluster)) continue ;
+	  ++nClusHash ;
+	  arr(readClus, b->codeHash[i].read, int) = c ;
+	  r = arrp(info, c, ReportInfo) ;
 	  ++r->n ;
 	  U32 bh = b->codeHash[i].hash ;
-	  ++r->nt[cribType[bh]] ;
-	  if (cribType[bh] > CRIB_ERR && cribType[bh] < CRIB_MUL)
-	    { CribInfo ch = crib[bh] ;
-	      if (!r->chr) { r->chr = ch.chr ; r->pMin = r->pMax = ch.pos ; }
-	      else if (ch.chr == r->chr)
-		{ if (ch.pos < r->pMin) r->pMin = ch.pos ;
-		  if (ch.pos > r->pMax) r->pMax = ch.pos ;
+	  if (crib)
+	    { ++r->nt[cribType[bh]] ;
+	      if (cribType[bh] > CRIB_ERR && cribType[bh] < CRIB_MUL)
+		{ CribInfo ch = crib[bh] ;
+		  if (!r->chr) { r->chr = ch.chr ; r->pMin = r->pMax = ch.pos ; }
+		  else if (ch.chr == r->chr)
+		    { if (ch.pos < r->pMin) r->pMin = ch.pos ;
+		      if (ch.pos > r->pMax) r->pMax = ch.pos ;
+		    }
+		  else { ++r->nBad ; arr(badLink,i,int) = r->bad ; r->bad = i ; }
 		}
-	      else ++r->nBad ;
 	    }
 	}
-  
-      int nTrueClusters = 0 ;
+
+      int nClusRead = 0 ;
+      for (i = 0 ; i < b->nRead ; ++i)
+	if ((c = arr(readClus,i,int))) { ++arrp(info,c,ReportInfo)->nRead ; ++nClusRead ; }
+      
+      printf ("  code %d nRead %d nHash %d nGoodHash %d nClusHash %d nClusRead %d nCluster %d\n",
+	      code, b->nRead, b->nHash, nGoodHashes[code], nClusHash, nClusRead, b->nCluster) ;
       for (i = 1 ; i <= b->nCluster ; ++i)
-	{ r = arrp(a, i, ReportInfo) ; if (!r->n) continue ;
-	  ++nTrueClusters ;
-	  printf ("  code_cluster %d %d : %d hashes", code, i, r->n) ;
-	  printf (" %d hom, %d htA, %d htB, %d mul, %d err", r->nt[CRIB_HOM],
-		  r->nt[CRIB_HTA], r->nt[CRIB_HTB], r->nt[CRIB_MUL], r->nt[CRIB_ERR]) ;
-	  if (r->chr)
-	    printf ("  chr %d pos %d - %d (%d)", r->chr, r->pMin, r->pMax, r->pMax-r->pMin+1) ;
-	  if (r->nBad) printf ("  OTHER CHROMOSOMES %d", r->nBad) ;
+	{ r = arrp(info, i, ReportInfo) ; if (!r->n) continue ;
+	  printf ("    code_cluster %d %d : %d reads %d hashes", code, i, r->nRead, r->n) ;
+	  if (crib)
+	    { printf (" %d hom, %d htA, %d htB, %d mul, %d err", r->nt[CRIB_HOM],
+		      r->nt[CRIB_HTA], r->nt[CRIB_HTB], r->nt[CRIB_MUL], r->nt[CRIB_ERR]) ;
+	      if (r->chr)
+		printf ("  chr %d pos %d %d", r->chr, r->pMin, r->pMax-r->pMin+1) ;
+	      if (r->nBad)
+		{ printf ("  OTHER %d", r->nBad) ;
+		  int x = r->bad, j = 10 ;
+		  while (x && j--)
+		    { printf (" %s", cribText(b->codeHash[x].hash)) ;
+		      x = arr(badLink, x, int) ;
+		    }
+		}
+	    }
 	  putchar ('\n') ;
 	}
-      printf ("  code %d nRead %d nHash %d nGoodHash %d nClusters %d\n",
-	      code, b->nRead, b->nHash, nGoodHashes[code], b->nCluster) ;
       totalGoodHash += nGoodHashes[code] ;
       totalPointToMin += b->pointToMin ;
     }
@@ -767,7 +804,7 @@ void codeClusterReport (int codeMin, int codeMax)
   if (totalGoodHash)
     printf ("  density_point_to_min %.3f\n", totalPointToMin / totalGoodHash) ;
   
-  arrayDestroy (a) ;
+	  arrayDestroy (info) ; arrayDestroy (readClus) ;
 }
 
 /************************************************************/
@@ -831,17 +868,18 @@ void clusterSplitCodes (void)
 
 /************************************************************/
 
-void usage (int k, int w, int r, int B, int N, int chunkSize)
+void usage (void)
 { fprintf (stderr, "Usage: hash10x <commands>\n") ;
   fprintf (stderr, "Commands can be parameter settings with -x, or operations:\n") ;
   fprintf (stderr, "Be sure to set relevant parameters before invoking an operation!\n") ;
-  fprintf (stderr, "   -k <kmer size> [%d]\n", k) ;
-  fprintf (stderr, "   -w <window> [%d]\n", w) ;
-  fprintf (stderr, "   -r <random number seed> [%d]\n", r) ;
-  fprintf (stderr, "   -B <hash index table bitcount> [%d]\n", B) ;
-  fprintf (stderr, "   -N <num records to read: 0 for all> [%d]\n", N) ;
-  fprintf (stderr, "   -c <file chunkSize in readPairs> [%d]\n", chunkSize) ;
-  fprintf (stderr, "   -t : number of threads for parallel ops [%d]\n", numThreads) ;
+  fprintf (stderr, "   -k <kmer size> [%d]\n", params.k) ;
+  fprintf (stderr, "   -w <window> [%d]\n", params.w) ;
+  fprintf (stderr, "   -r <random number seed> [%d]\n", params.r) ;
+  fprintf (stderr, "   -B <hash index table bitcount> [%d]\n", params.B) ;
+  fprintf (stderr, "   -N <num records to read: 0 for all> [%d]\n", params.N) ;
+  fprintf (stderr, "   -c <file chunkSize in readPairs> [%d]\n", params.chunkSize) ;
+  fprintf (stderr, "   -cT | --clusterThreshold <clusterThreshold> [%d]\n", params.clusterThreshold) ;
+  fprintf (stderr, "   -t | --threads <number of threads for parallel ops> [%d]\n", numThreads) ;
   fprintf (stderr, "   --interactive: enter interactive mode: --commands only without --\n") ;
   fprintf (stderr, "   --tables: toggle to print tables for operations while this is set\n") ;
   fprintf (stderr, "   --verbose: toggle for verbose mode\n") ;
@@ -890,18 +928,19 @@ int main (int argc, char *argv[])
   timeUpdate (stdout) ;		/* initialise timer */
 
   /* command line parameters */
-  int k = 21 ;
-  int w = 31 ;
-  int r = 17 ;
-  int B = 28 ;
-  int N = 0 ;
-  int chunkSize = 100000 ;
+  params.k = 21 ;
+  params.w = 31 ;
+  params.r = 17 ;
+  params.B = 28 ;
+  params.N = 0 ;
+  params.chunkSize = 100000 ;
+  params.clusterThreshold = 5 ;
 #ifdef OMP
   numThreads = omp_get_max_threads () ;
   omp_set_num_threads (numThreads) ;
 #endif
   
-  if (!argc) usage (k, w, r, B, N, chunkSize) ;
+  if (!argc) usage () ;
 
 #ifdef SIZES
   printf ("sizeof BarcodeBlock is %d\n", sizeof(BarcodeBlock)) ;
@@ -925,13 +964,13 @@ int main (int argc, char *argv[])
 	putchar ('\n') ;
       }
 #define ARGMATCH(x,n)	(!strcmp (*argv, x) && argc >= n && (argc -= n, argv += n))
-    if (ARGMATCH("-k",2)) k = atoi(argv[-1]) ;
-    else if (ARGMATCH("-w",2)) w = atoi(argv[-1]) ;
-    else if (ARGMATCH("-r",2)) r = atoi(argv[-1]) ;
-    else if (ARGMATCH("-B",2)) B = atoi(argv[-1]) ;
-    else if (ARGMATCH("-N",2)) N = atoi(argv[-1]) ;
-    else if (ARGMATCH("-c",2)) chunkSize = atoi(argv[-1]) ;
-    else if (ARGMATCH("-t",2))
+    if (ARGMATCH("-k",2)) params.k = atoi(argv[-1]) ;
+    else if (ARGMATCH("-w",2)) params.w = atoi(argv[-1]) ;
+    else if (ARGMATCH("-r",2)) params.r = atoi(argv[-1]) ;
+    else if (ARGMATCH("-B",2)) params.B = atoi(argv[-1]) ;
+    else if (ARGMATCH("-N",2)) params.N = atoi(argv[-1]) ;
+    else if (ARGMATCH("-c",2)) params.chunkSize = atoi(argv[-1]) ;
+    else if (ARGMATCH("-t",2) || ARGMATCH ("--threads",2))
       {
 #ifdef OMP
 	numThreads = atoi(argv[-1]) ;
@@ -949,13 +988,13 @@ int main (int argc, char *argv[])
     else if (ARGMATCH("--verbose",1)) isVerbose = !isVerbose ;
     else if (ARGMATCH("--readFQB",2))
       { if (!(f = fopen (argv[-1], "r"))) die ("failed to open fqb file %s", argv[-1]) ;
-	initialise (k, w, r, B) ;
-        readFQB (f, N, chunkSize) ;
+	initialise (params.k, params.w, params.r, params.B) ;
+        readFQB (f, params.N, params.chunkSize) ;
 	fillHashTable () ;
       }
     else if (ARGMATCH("--readHash",2))
       { if (!(f = fopen (argv[-1], "r"))) die ("failed to open hash file %s", argv[-1]) ;
-	initialise (k, w, r, B) ;
+	initialise (params.k, params.w, params.r, params.B) ;
 	readHashFile (f) ;
 	fillHashTable () ;
       }
@@ -977,6 +1016,8 @@ int main (int argc, char *argv[])
 	if (!(f2 = fopen (argv[-1], "r"))) die ("failed to open .fa file %s", argv[-1]) ;
 	cribBuild (f1, f2) ;
       }
+    else if (ARGMATCH("-ct",2) || ARGMATCH ("--clusterThreshold",2))
+      params.clusterThreshold = atoi(argv[-1]) ;
     else if (ARGMATCH("--cluster",3))
       { int code, codeMin = atoi(argv[-2]), codeMax = atoi(argv[-1]) ;
 	if (!codeMax) codeMax = arrayMax(barcodeBlocks) ;
@@ -985,7 +1026,7 @@ int main (int argc, char *argv[])
 #pragma omp parallel for
 #endif
 	for (code = codeMin ; code < codeMax ; ++code)
-	  { codeClusterFind (code) ;
+	  { codeClusterFind (code, params.clusterThreshold) ;
 	    codeClusterReadMerge (code) ;
 	  }
 	printf ("  clustered codes %d to %d\n", codeMin, codeMax) ;
@@ -1006,7 +1047,7 @@ int main (int argc, char *argv[])
       { if (!(f = fopen (argv[-1], "w"))) die ("failed to open code stats file %s", argv[-1]) ;
 	codeSizeHist (f) ;
       }
-    else if (ARGMATCH("--help",1)) usage (k, w, r, B, N, chunkSize) ;
+    else if (ARGMATCH("--help",1)) usage () ;
     else if (ARGMATCH("--quit",1) || ARGMATCH("--exit",1)) break ; /* end loop */
     else
       if (isInteractive) fprintf (stderr, "  unknown option/command %s", (*argv)+2) ;
@@ -1043,7 +1084,7 @@ int main (int argc, char *argv[])
 
 #include "hash.h"
 
-void exploreHash2 (int x)
+void exploreHash2 (int x, int clusterThreshold)
 {
   Array hash1 = hashNeighbours (x) ; if (!hash1) return ;
   printf ("  %d hashes sharing codes with %s\n", arrayMax(hash1), cribText (x)) ;
@@ -1052,7 +1093,7 @@ void exploreHash2 (int x)
   HASH code1Hash = hashCreate (1024) ;
   int i, j ;
   for (i = 0 ; i < arrayMax(hash1) ; ++i)
-    if (arrp(hash1,i,CodeHash)->read >= 5)
+    if (arrp(hash1,i,CodeHash)->read >= clusterThreshold)
       { for (j = 0 ; j < 27 ; ++j) ; }
   
   arrayDestroy (hash1) ; arrayDestroy (code1Count) ; hashDestroy (hash1) ;
