@@ -20,7 +20,7 @@
  * -------------------------------------------------------------------
  * Exported functions:
  * HISTORY:
- * Last edited: Jul 24 15:45 2018 (rd)
+ * Last edited: Aug  1 20:12 2018 (rd)
  * Created: Fri Jan  7 09:20:25 2011 (rd)
  *-------------------------------------------------------------------
  */
@@ -69,10 +69,10 @@ static const int REMOVED = (INT_MAX-1)^INT_MAX ;
 
 static int nCreated = 0 ;
 static int nDestroyed = 0 ;
-static int nAdded = 0 ;
-static int nBounced = 0 ;
-static int nFound = 0 ;
-static int nNotFound = 0 ;
+static long int nAdded = 0 ;
+static long int nBounced = 0 ;
+static long int nFound = 0 ;
+static long int nNotFound = 0 ;
 
 /**************** create/destroy/clear ******************/
 
@@ -129,14 +129,14 @@ static void hashDouble (TRUE_HASH *h)
   newsize = 1 << h->nbits ;
   h->mask = (1 << h->nbits) - 1 ;
   h->guard = (1 << (h->nbits - 1)) ;
-
+  
   oldKeys = h->keys ;
   h->keys  = (int*) myalloc (sizeof(int)*newsize) ;
   memset (h->keys, 0, sizeof(int)*(1 << h->nbits)) ;
   oldValues = h->values ;
   h->values = (int*) myalloc (sizeof(int)*newsize) ;
 
-  for (i = 0, kp = oldKeys ; i < oldsize ; i++)
+  for (i = 0, kp = oldKeys ; i < oldsize ; ++i, ++kp)
     if (*kp && *kp != REMOVED)
       { hk.i = *kp ; HASH_FUNC(hk) ;
         while (TRUE)
@@ -208,7 +208,9 @@ int hashAdd (HASH hx, HASHKEY k)
 	return h->values[hash] ;
       }
     else if (h->keys[hash] == k.i)		/* already there */
-      return h->values[hash] ;
+      { ++nFound ;
+	return h->values[hash] ;
+      }
     else
       { nBounced++ ;
 	if (!delta) DELTA (k) ;
@@ -272,7 +274,7 @@ void hashStats (void)
 {
   printf ("%d hashes (%d created, %d destroyed)\n", 
 	  nCreated - nDestroyed, nCreated, nDestroyed) ;
-  printf ("%d added, %d found, %d bounced, %d not found\n",
+  printf ("%ld added, %ld found, %ld bounced, %ld not found\n",
 	  nAdded, nFound, nBounced, nNotFound) ;
 }
 
