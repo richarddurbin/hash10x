@@ -7,7 +7,7 @@
 		Jean Thierry-Mieg and Richard Durbin 1989-
  * Exported functions:
  * HISTORY:
- * Last edited: Mar 17 08:38 2018 (rd)
+ * Last edited: Nov  6 12:43 2018 (rd109)
  * Created: Sat Dec 20 09:34:14 2008 (rd)
  *-------------------------------------------------------------------
  */
@@ -25,6 +25,8 @@ typedef struct {
 
 DICT *dictCreate (int size) ;
 void dictDestroy (DICT *dict) ;
+BOOL dictWrite (DICT *dict, FILE *f) ; /* return success or failure */
+DICT *dictRead (FILE *f) ;	       /* return 0 on failure */
 int dictAdd (DICT *dict, char* string, int *index) ;
 int dictFind (DICT *dict, char *string, int *index) ;
 char* dictName (DICT *dict, int i) ;

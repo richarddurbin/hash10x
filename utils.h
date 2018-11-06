@@ -5,7 +5,7 @@
  * Description: includes standard system headers and own headers
  * Exported functions:
  * HISTORY:
- * Last edited: Jul 30 11:40 2018 (rd)
+ * Last edited: Nov  6 17:38 2018 (rd109)
  * Created: Wed Jan  5 16:13:48 2011 (rd)
  *-------------------------------------------------------------------
  */
@@ -51,7 +51,10 @@ void *myalloc (size_t size) ;
 void *mycalloc (size_t number, size_t size) ;
 #define	new(n,type)	(type*)myalloc((n)*sizeof(type))
 #define	new0(n,type)	(type*)mycalloc((n),sizeof(type))
+#define resize(x,n,T) { T* z = new((n),T) ; memcpy(z,x,(n)*sizeof(T)) ; free(x) ; x = z ; }
+
 char *fgetword (FILE *f) ;	/* not threadsafe */
+FILE *fopenTag (char* root, char* tag, char* mode) ;
 void timeUpdate (FILE *f) ;	/* print time usage since last call to file */
 void timeTotal (FILE *f) ;	/* print full time usage since first call to timeUpdate */
 

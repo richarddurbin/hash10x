@@ -5,7 +5,7 @@
  * Description: core utility functions
  * Exported functions:
  * HISTORY:
- * Last edited: Jul 24 15:43 2018 (rd)
+ * Last edited: Nov  6 12:35 2018 (rd109)
  * Created: Thu Aug 15 18:32:26 1996 (rd)
  *-------------------------------------------------------------------
  */
@@ -70,6 +70,18 @@ char *fgetword (FILE *f)
       }
   *cp = 0 ;
   return buf ;
+}
+
+FILE *fopenTag (char* root, char* tag, char* mode)
+{
+  if (strlen (tag) > 30) die ("tag %s in fopenTag too long - should be < 30 chars", tag) ;
+  char *fileName = new (strlen (root) + 32, char) ;
+  strcpy (fileName, root) ;
+  strcat (fileName, ".") ;
+  strcat (fileName, tag) ;
+  FILE *f = fopen (fileName, mode) ;
+  free (fileName) ;
+  return f ;
 }
 
 /***************** rusage for timing information ******************/

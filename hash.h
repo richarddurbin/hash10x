@@ -25,7 +25,7 @@
       - support removal of objects, with free-list to reuse indices of removed objects
  * Exported functions:
  * HISTORY:
- * Last edited: Mar 18 15:57 2011 (rd)
+ * Last edited: Sep 13 14:58 2018 (rd)
  * Created: Thu Jan 13 10:57:20 2011 (rd)
  *-------------------------------------------------------------------
  */
@@ -48,6 +48,7 @@ void hashClear (HASH h) ;
 int  hashFind (HASH h, HASHKEY k) ; /* if found, returns index, else returns 0 */
 int  hashAdd  (HASH h, HASHKEY k) ; /* returns index for the key, creating if necessary */
 BOOL hashRemove (HASH h, HASHKEY k) ; /* if found, remove and return TRUE, else FALSE */
+int  hashCount (HASH h) ;
 
 /* iterator to get all key-value pairs, in arbitrary order */
 /* note that if nothing is removed then values are incrementing from 1 to n_added */

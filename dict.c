@@ -20,7 +20,7 @@
  * Description:
  * Exported functions:
  * HISTORY:
- * Last edited: Mar 17 08:38 2018 (rd)
+ * Last edited: Nov  6 13:21 2018 (rd109)
  * Created: July 2003 (rd)
  *-------------------------------------------------------------------
  */
@@ -83,6 +83,40 @@ void dictDestroy (DICT *dict)
   free (dict->names) ;
   free (dict->table) ;
   free (dict) ;
+}
+
+/*****************************/
+
+BOOL dictWrite (DICT *dict, FILE *f)
+{
+  if (fwrite (&dict->dim,sizeof(int),1,f) != 1) return FALSE ;
+  if (fwrite (&dict->max,sizeof(int),1,f) != 1) return FALSE ;
+  if (fwrite (dict->table,sizeof(int),dict->size,f) != dict->size) return FALSE ;
+  if (fwrite (dict->names,sizeof(char*),dict->max+1,f) != dict->max+1) return FALSE ;
+  int i ;
+  for (i = 1 ; i <= dict->max ; ++i)
+    { int len = strlen(dict->names[i]) ;
+      if (fwrite (&len,sizeof(int),1,f) != 1) return FALSE ;
+      if (fwrite (dict->names[i],1,len,f) != len) return FALSE ;
+    }
+  return TRUE ;
+}
+  
+DICT *dictRead (FILE *f)
+{
+  int dim ; if (fread (&dim,sizeof(int),1,f) != 1) return 0 ;
+  DICT *dict = dictCreate (1 << dim) ;
+  if (fread (&dict->max,sizeof(int),1,f) != 1) return 0 ;
+  if (fread (dict->table,sizeof(int),dict->size,f) != dict->size) return 0 ;
+  if (fread (dict->names,sizeof(char*),dict->max+1,f) != dict->max+1) return 0 ;
+  int i ;
+  for (i = 1 ; i <= dict->max ; ++i)
+    { int len ;
+      if (fread (&len,sizeof(int),1,f) != 1) return 0 ;
+      dict->names[i] = new0 (len+1, char) ;
+      if (fread (dict->names[i],1,len,f) != len) return 0 ;
+    }
+  return dict ;
 }
 
 /*****************************/

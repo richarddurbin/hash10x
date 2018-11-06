@@ -20,7 +20,7 @@
  * -------------------------------------------------------------------
  * Exported functions:
  * HISTORY:
- * Last edited: Aug  1 20:12 2018 (rd)
+ * Last edited: Sep 13 15:15 2018 (rd)
  * Created: Fri Jan  7 09:20:25 2011 (rd)
  *-------------------------------------------------------------------
  */
@@ -269,6 +269,8 @@ int hashNextKeyValue (HASH hx, HASHKEY *kp, int *ip)
 }
 
 /**********************************************************************/
+
+int hashCount (HASH hx) { TRUE_HASH *h = (TRUE_HASH*) hx ; return (h->n) ; }
 
 void hashStats (void)
 {

@@ -5,19 +5,17 @@
  * Description:
  * Exported functions:
  * HISTORY:
- * Last edited: Nov  6 17:04 2018 (rd109)
+ * Last edited: Nov  6 22:10 2018 (rd109)
  * Created: Sat Oct 27 20:37:44 2018 (rd109)
  *-------------------------------------------------------------------
  */
 
-#include "seqhash.h"
-#include "array.h"
-#include "dict.h"
+#include "moshset.h"
+#include "readseq.h"
 #include <ctype.h>
 #ifdef OMP
 #include <omp.h>
 #endif
-#include "readseq.h"
 
 int numThreads = 1 ;		/* default to serial - reset if multi-threaded */
 FILE *outFile ;			/* initialise to stdout at start of main() */
@@ -30,97 +28,6 @@ struct {
   int B ;
 } params ;
 
-/* object to hold sets of moshes */
-typedef struct {
-  Seqhash *hasher ;
-  int tableBits ;		/* default 30, max 34 so moshSize < 2^32 so index is 32bit */
-  U32 size ;			/* size of value array, and other arrays over this set */
-  U64 tableSize ; 		/* = 1 << moshTableBits */
-  U64 tableMask ;		/* = tableSize - 1 */
-  U32 *index ;			/* size tableSize - this is the primary table */
-  U64 *value ;			/* the hashed values */
-  U32 max ;			/* number of entries in the set - must be less than size */
-} Moshset ;
-  
-Moshset *moshsetCreate (Seqhash *sh, int bits, U32 size)
-{
-  if (bits < 20 || bits > 34) die ("table bits %d must be between 20 and 34", bits) ;
-  Moshset *ms = new0 (1, Moshset) ;
-  ms->hasher = sh ;
-  ms->tableBits = bits ;
-  ms->tableSize = 1 << ms->tableBits ;
-  ms->tableMask = ms->tableSize - 1 ;
-  ms->index = new0 (ms->tableSize, U32) ;
-  if (size >= (ms->tableSize >> 2)) die ("Moshset size %lld is too big for %d bits", size, bits) ;
-  else if (size) ms->size = size ;
-  else ms->size = (ms->tableSize >> 2) - 1 ;
-  ms->value = new (ms->size, U64) ;
-  return ms ;
-}
-
-void moshsetDestroy (Moshset *ms) { free (ms->value) ; free (ms->index) ; free (ms) ; }
-
-#define resize(x,n,T) { T* z = new((n),T) ; memcpy(z,x,(n)*sizeof(T)) ; free(x) ; x = z ; }
-
-void moshsetPack (Moshset *ms)	/* compress value array */
-{ resize (ms->value, ms->max+1, U64) ;
-  ms->size = ms->max+1 ;
-}
-
-static inline U32 moshsetIndexFind (Moshset *ms, U64 hash, int isAdd)
-{
-  U64 diff = 0 ;
-  U64 offset = hash & ms->tableMask ;
-  U32 index = ms->index[offset] ;
-  while (index && (ms->value[index] != hash))
-    { if (!diff) diff = ((hash >> ms->tableBits) & ms->tableMask) | 1 ; /* odd so comprime */
-      offset = (offset + diff) & ms->tableMask ;
-      index = ms->index[offset] ;
-    }
-  if (!index && isAdd)
-    { index = ms->index[offset] = ++ms->max ;
-      if (ms->max >= ms->size) die ("hashTableSize is too small") ;
-      ms->value[index] = hash ;
-    }
-  return index ;
-}
-
-void moshsetDepthPrune (Moshset *ms, U32 *depth, int min, int max)
-{
-  U32 i ;
-  U32 N = ms->max ; ms->max = 0 ;
-  memset (ms->index, 0, ms->tableSize*sizeof(U32)) ;
-  for (i = 1 ; i <= N ; ++i)	/* NB index runs from 1..max */
-    if (depth[i] >= min && (!max || depth[i] <= max))
-      { moshsetIndexFind (ms, ms->value[i], TRUE) ;
-	depth[ms->max] = depth[i] ;
-      }
-  fprintf (outFile, "  pruned Moshset from %d to %d with min %d max %d\n", N, ms->max, min, max) ;
-}
-
-void moshsetWrite (Moshset *ms, FILE *f)
-{ if (fwrite ("MSHSTv1",8,1,f) != 1) die ("failed to write moshset header") ;
-  if (fwrite (&ms->tableBits,sizeof(int),1,f) != 1) die ("failed to write bits") ;
-  U32 size = ms->max+1 ; if (fwrite (&size,sizeof(U32),1,f) != 1) die ("failed to write size") ;
-  seqhashWrite (ms->hasher, f) ;
-  if (fwrite (ms->index,sizeof(U32),ms->tableSize,f) != ms->tableSize) die ("fail write index") ;
-  if (fwrite (ms->value,sizeof(U64),ms->max+1,f) != ms->max+1) die ("failed to write value") ;
-}
-
-Moshset *moshsetRead (FILE *f)
-{ char name[8] ;
-  if (fread (name,8,1,f) != 1) die ("failed to read moshset header") ;
-  if (strcmp (name, "MSHSTv1")) die ("bad reference header") ;
-  int bits ; if (fread (&bits,sizeof(int),1,f) != 1) die ("failed to read bits") ;
-  U32 size ; if (fread (&size,sizeof(U32),1,f) != 1) die ("failed to read size") ;
-  Seqhash *sh = seqhashRead (f) ;
-  Moshset *ms = moshsetCreate (sh, bits, size) ;
-  if (fread (ms->index,sizeof(U32),ms->tableSize,f) != ms->tableSize) die ("failed read index") ;
-  if (fread (ms->value,sizeof(U64),size,f) != size) die ("failed to read value") ;
-  ms->max = size - 1 ;
-  return ms ;
-}
-
 /*******************************************************************/
 
 /* object to hold a reference sequence */
@@ -128,7 +35,7 @@ typedef struct {
   Moshset *ms ;
   U32 size ;			/* size of index, offset, id */
   U32 max ;		      	/* number of indices in the reference */
-  U32 *index ;			/* consecutive Moshset index values */
+  U32 *index ; 			/* consecutive Moshset index values */
   U32 *offset ;			/* base offset within relevant sequence */
   U32 *id ;			/* index into refDict */
   U32 *depth ;		  	/* number of times this index is seen; size ms->size */
@@ -212,6 +119,12 @@ void referenceFastaRead (Reference *ref, FILE *f, BOOL isAdd)
 
   fprintf (outFile, "  %d hashes from %d reference sequences, total length %lld\n",
 	   ref->max, dictMax(ref->dict), totLen) ;
+  int i ; U32 *d = &ref->depth[1] ; U32 n1 = 0, n2 = 0, nM = 0 ;
+  for (i = 1 ; i <= ref->ms->max ; ++i, ++d)
+    if (*d == 1) { msSetCopy1 (ref->ms, i) ; ++n1 ; }
+    else if (*d == 2) { msSetCopy2 (ref->ms, i) ; ++n2 ; }
+    else { msSetCopyM (ref->ms, i) ; ++nM ; }
+  fprintf (outFile, "  %d copy 1, %d copy 2, %d multiple\n", n1, n2, nM) ;
 
   if (isAdd) moshsetPack (ref->ms) ;
   referencePack (ref) ;
@@ -358,10 +271,6 @@ void usage (void)
   fprintf (stderr, "  -q | --query <query fasta file>\n") ;
 }
 
-void initialise (void)
-{
-}
-
 int main (int argc, char *argv[])
 {
   --argc ; ++argv ;		/* eat program name */
@@ -446,3 +355,5 @@ int main (int argc, char *argv[])
   fprintf (outFile, "total resources used: ") ; timeTotal (outFile) ;
   if (outFile != stdout) { printf ("total resources used: ") ; timeTotal (stdout) ; }
 }
+
+/************* end of file ************/
