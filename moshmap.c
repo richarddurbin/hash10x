@@ -5,7 +5,7 @@
  * Description:
  * Exported functions:
  * HISTORY:
- * Last edited: Nov  6 22:10 2018 (rd109)
+ * Last edited: Nov  7 09:57 2018 (rd109)
  * Created: Sat Oct 27 20:37:44 2018 (rd109)
  *-------------------------------------------------------------------
  */
@@ -82,9 +82,11 @@ void referencePack (Reference *ref)
   ref->loc = new (ref->ms->max + 1, U32) ; ref->loc[0] = 0 ;
   int i ;
   for (i = 1 ; i <= ref->ms->max ; ++i)
-    { ref->loc[i] = ref->loc[i-1] + ref->depth[i] ; ref->depth[i] = 0 ; } /* reuse depth below */
+    { ref->loc[i] = ref->loc[i-1] + ref->depth[i-1] ; }
+  memset (ref->depth, 0, ref->ms->size*sizeof(U32)) ; /* build this up again in loop below */
   U32 *ri = ref->index ;
-  for (i = 0 ; i < ref->max ; ++i, ++ri) ref->rev[ref->loc[*ri] + ref->depth[*ri]++] = i ;
+  for (i = 0 ; i < ref->max ; ++i, ++ri)
+    ref->rev[ref->loc[*ri] + ref->depth[*ri]++] = i ;
 }
 
 void referenceFastaRead (Reference *ref, FILE *f, BOOL isAdd)
@@ -193,17 +195,17 @@ void queryProcess (Reference *ref, FILE *f)
     { SeqhashRCiterator *mi = moshRCiterator (ref->ms->hasher, seq, len) ;
       U64 hash ; int pos ;
       seeds = arrayReCreate (seeds, 1024, Seed) ;
-      int missed = 0, unique = 0 ;
+      int missed = 0, copy[4] ; copy[1] = copy[2] = copy[3] = 0 ;
       while (moshRCnext (mi, &hash, &pos))
 	{ U32 index = moshsetIndexFind (ref->ms, hash, FALSE) ;
 	  Seed *s = arrayp(seeds,arrayMax(seeds),Seed) ;
 	  s->index = index ; s->pos = pos ;
-	  if (index && ref->depth[index] == 1) ++unique ;
-	  else if (!index) ++missed ;
+	  if (index) ++copy[msCopy(ref->ms,index)] ;
+	  else ++missed ;
 	}
       seqhashRCiteratorDestroy (mi) ;
-      fprintf (outFile, "Q\t%s\t%d\t%d miss, %d unique, %d multi, %.2f hit\n",
-	       seqName, len, missed, unique, arrayMax(seeds)-unique-missed,
+      fprintf (outFile, "Q\t%s\t%d\t%d miss, %d copy1, %d copy2, %d multi, %.2f hit\n",
+	       seqName, len, missed, copy[1], copy[2], copy[3],
 	       (arrayMax(seeds)-missed)/(double)(arrayMax(seeds))) ;
 
       int i ;
@@ -211,7 +213,7 @@ void queryProcess (Reference *ref, FILE *f)
       int nHit = 0 ;
       for (i = 0 ; i < arrayMax(seeds) ; ++i)
 	{ Seed *s = arrp (seeds, i, Seed) ;
-	  if (s->index && ref->depth[s->index] == 1) /* only consider unique hits for now */
+	  if (s->index && msIsCopy1(ref->ms,s->index)) /* only consider unique hits for now */
 	    { U32 loc = ref->rev[ref->loc[s->index]] ;
 	      if (isVerbose)
 		printf ("  %6d\t%s\t%8d\t%8d\t%8d\n", s->pos, dictName(ref->dict,ref->id[loc]),
@@ -233,7 +235,7 @@ void queryProcess (Reference *ref, FILE *f)
 			     dictName(ref->dict,ref->id[loc0]),
 			     ref->offset[loc0], ref->offset[locN],
 			     nHit, nHit / (double)((locN>loc0) ? (locN-loc0) : (loc0-locN)),
-			     nHit / (double)unique) ;
+			     nHit / (double)copy[1]) ;
 		  nHit = 0 ; loc0 = loc ; i0 = i ;
 		}
 	      ++nHit ; locN = loc ; iN = i ;
@@ -245,7 +247,7 @@ void queryProcess (Reference *ref, FILE *f)
 		 dictName(ref->dict,ref->id[loc0]),
 		 ref->offset[loc0], ref->offset[locN],
 		 nHit, nHit / (double)((locN>loc0) ? (locN-loc0) : (loc0-locN)),
-		 nHit / (double) unique) ;
+		 nHit / (double)copy[1]) ;
 
       free (seq) ; free (seqName) ;
     }
