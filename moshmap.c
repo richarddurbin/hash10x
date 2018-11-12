@@ -5,7 +5,7 @@
  * Description:
  * Exported functions:
  * HISTORY:
- * Last edited: Nov  7 09:57 2018 (rd109)
+ * Last edited: Nov  7 13:21 2018 (rd109)
  * Created: Sat Oct 27 20:37:44 2018 (rd109)
  *-------------------------------------------------------------------
  */
@@ -210,14 +210,23 @@ void queryProcess (Reference *ref, FILE *f)
 
       int i ;
       U32 loc0 = 0, locN, i0, iN ;
-      int nHit = 0 ;
+      int n1 = 0, n2 = 0 ;
       for (i = 0 ; i < arrayMax(seeds) ; ++i)
 	{ Seed *s = arrp (seeds, i, Seed) ;
-	  if (s->index && msIsCopy1(ref->ms,s->index)) /* only consider unique hits for now */
+	  if (s->index && !msIsCopyM(ref->ms,s->index)) /* ignore multi-hits for now */
 	    { U32 loc = ref->rev[ref->loc[s->index]] ;
+	      BOOL is1 = msIsCopy1(ref->ms,s->index) ;
 	      if (isVerbose)
-		printf ("  %6d\t%s\t%8d\t%8d\t%8d\n", s->pos, dictName(ref->dict,ref->id[loc]),
-			ref->offset[loc], ref->offset[loc] - s->pos, ref->offset[loc] + s->pos) ;
+		{ if (is1)
+		    printf ("  %6d\t%s %d\n", s->pos,
+			    dictName(ref->dict,ref->id[loc]), ref->offset[loc]) ;
+		  else
+		    { U32 loc2 = ref->rev[ref->loc[s->index]+1] ;
+		      printf ("  %6d\t%s %d\t%s %d\n", s->pos,
+			      dictName(ref->dict,ref->id[loc]), ref->offset[loc],
+			      dictName(ref->dict,ref->id[loc2]), ref->offset[loc2]) ;
+		    }
+		}
 	      BOOL endBlock = FALSE ;
 	      if (!loc0 || ref->id[loc] != ref->id[loc0]) endBlock = TRUE ;
 	      else if (loc0 < locN)
@@ -228,26 +237,39 @@ void queryProcess (Reference *ref, FILE *f)
 		{ if (loc > locN) endBlock = TRUE ;
 		  int d = loc0 - locN - iN + i0 ; if (d > 50 || d < -50) endBlock = TRUE ;
 		}
+	      if (endBlock && loc0 && !is1) /* try the second loc */
+		{ loc = ref->rev[ref->loc[s->index]+1] ;
+		  endBlock = FALSE ;
+		  if (ref->id[loc] != ref->id[loc0]) endBlock = TRUE ;
+		   else if (loc0 < locN)
+		     { if (loc < locN) endBlock = TRUE ;
+		       int d = locN - loc0 - iN + i0 ; if (d > 50 || d < -50) endBlock = TRUE ;
+		     }
+		   else if (loc0 > locN)
+		     { if (loc > locN) endBlock = TRUE ;
+		       int d = loc0 - locN - iN + i0 ; if (d > 50 || d < -50) endBlock = TRUE ;
+		     }
+		}
 	      if (endBlock)
-		{ if (nHit > 2)
-		    fprintf (outFile, "M\t%s\t%d\t%d\t%d\t%s\t%d\t%d\t%d\t%.2f\t%.2f\n",
+		{ if (n1 > 2)
+		    fprintf (outFile, "M\t%s\t%d\t%d\t%d\t%s\t%d\t%d\t%d %d\t%.2f\t%.2f\n",
 			     seqName, arrp(seeds,i0,Seed)->pos, arrp(seeds,iN,Seed)->pos, len,
 			     dictName(ref->dict,ref->id[loc0]),
 			     ref->offset[loc0], ref->offset[locN],
-			     nHit, nHit / (double)((locN>loc0) ? (locN-loc0) : (loc0-locN)),
-			     nHit / (double)copy[1]) ;
-		  nHit = 0 ; loc0 = loc ; i0 = i ;
+			     n1, n2, (n1+n2) / (double)((locN>loc0) ? (locN-loc0) : (loc0-locN)),
+			     n1 / (double)copy[1]) ;
+		  n1 = 0 ; n2 = 0 ; loc0 = loc ; i0 = i ;
 		}
-	      ++nHit ; locN = loc ; iN = i ;
+	      if (is1) ++n1 ; else ++n2 ; locN = loc ; iN = i ;
 	    }
 	}
-      if (nHit > 2)
-	fprintf (outFile, "M\t%s\t%d\t%d\t%d\t%s\t%d\t%d\t%d\t%.2f\t%.2f\n",
+      if (n2 > 2)
+	fprintf (outFile, "M\t%s\t%d\t%d\t%d\t%s\t%d\t%d\t%d %d\t%.2f\t%.2f\n",
 		 seqName, arrp(seeds,i0,Seed)->pos, arrp(seeds,iN,Seed)->pos, len,
 		 dictName(ref->dict,ref->id[loc0]),
 		 ref->offset[loc0], ref->offset[locN],
-		 nHit, nHit / (double)((locN>loc0) ? (locN-loc0) : (loc0-locN)),
-		 nHit / (double)copy[1]) ;
+		 n1, n2, (n1+n2) / (double)((locN>loc0) ? (locN-loc0) : (loc0-locN)),
+		 n1 / (double)copy[1]) ;
 
       free (seq) ; free (seqName) ;
     }
@@ -351,6 +373,8 @@ int main (int argc, char *argv[])
       }
     else if (ARGMATCH("-w","--referenceWrite",2))
       referenceWrite (ref, argv[-1]) ;
+    else die ("unkown command %s - run without arguments for usage", *argv) ;
+
     timeUpdate (outFile) ;
   }
 

@@ -4,7 +4,7 @@
 CFLAGS= -g				# for debugging
 #CFLAGS= -03 -DOMP -fopenmp		# for OMP parallelisation - doesn't compile on Mac
 
-all: fq2b hash10x
+all: fq2b hash10x moshmap moshasm
 
 clean:
 	$(RM) *.o *~ fq2b hash10x moshmap moshasm
@@ -21,6 +21,8 @@ seqhash.o: seqhash.h
 
 moshset.c: moshset.h
 
+seqio.o: seqio.h
+
 ### programs
 
 fq2b: fq2b.c $(UTILS_OBJS)
@@ -30,9 +32,12 @@ hash10x: hash10x.c readseq.o seqhash.o $(UTILS_OBJS)
 	$(CC) $(CFLAGS) $^ -o $@ -lm
 
 moshmap: moshmap.c readseq.o seqhash.o moshset.o $(UTILS_OBJS)
-	$(CC) $(CFLAGS) $^ -o $@ -lm
+	$(CC) $(CFLAGS) $^ -o $@ -lm -lz
 
-moshasm: moshasm.c readseq.o seqhash.o moshset.o $(UTILS_OBJS)
-	$(CC) $(CFLAGS) $^ -o $@ -lm
+moshasm: moshasm.c seqio.o seqhash.o moshset.o $(UTILS_OBJS)
+	$(CC) $(CFLAGS) $^ -o $@ -lm -lz
+
+composition: composition.c seqio.o $(UTILS_OBJS)
+	$(CC) $(CFLAGS) $^ -o $@ -lz
 
 ### end of file

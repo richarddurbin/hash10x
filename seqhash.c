@@ -7,7 +7,7 @@
 	see test main() at end for standard usage pattern
  * Exported functions: see seqhash.h
  * HISTORY:
- * Last edited: Nov  6 11:39 2018 (rd109)
+ * Last edited: Nov  7 13:48 2018 (rd109)
  * Created: Sat Feb 24 19:20:18 2018 (rd)
  *-------------------------------------------------------------------
  */
@@ -49,6 +49,9 @@ Seqhash *seqhashRead (FILE *f)
   if (fread (sh,sizeof(Seqhash),1,f) != 1) die ("failed to read seqhash") ;
   return sh ;
 }
+
+void seqhashReport (Seqhash *sh, FILE *f)
+{ fprintf (f, "SH k %d  w %d\n", sh->k, sh->w) ; }
 
 /************** basic hash functions *************/
 

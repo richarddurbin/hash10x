@@ -5,7 +5,7 @@
  * Description: header file for seqhash package - minimizers and moshers
  * Exported functions: see below
  * HISTORY:
- * Last edited: Nov  6 10:36 2018 (rd109)
+ * Last edited: Nov  7 13:42 2018 (rd109)
  * Created: Mon Mar  5 08:43:45 2018 (rd)
  *-------------------------------------------------------------------
  */
@@ -36,6 +36,7 @@ static void seqhashDestroy (Seqhash *sh) { free (sh) ; }
 
 void seqhashWrite (Seqhash *sh, FILE *f) ;
 Seqhash *seqhashRead (FILE *f) ;
+void seqhashReport (Seqhash *sh, FILE *f) ;
 
 // iterator to extract minimizers from a sequence
 // NB sequence must continue to exist through the life of the iterator

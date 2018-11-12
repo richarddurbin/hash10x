@@ -5,7 +5,7 @@
  * Description: core utility functions
  * Exported functions:
  * HISTORY:
- * Last edited: Nov  6 12:35 2018 (rd109)
+ * Last edited: Nov 12 21:08 2018 (rd109)
  * Created: Thu Aug 15 18:32:26 1996 (rd)
  *-------------------------------------------------------------------
  */
@@ -136,7 +136,7 @@ void timeUpdate (FILE *f)
       if (usecs < 0) { usecs += 1000000 ; secs -= 1 ; }
       fprintf (f, "\tsystem\t%d.%06d", secs, usecs) ;
       fprintf (f, "\tmax_RSS\t%ld", rNew.ru_maxrss - rOld.ru_maxrss) ;
-      fprintf (f, "\tMemory\t%li", totalAllocated) ;   
+      fprintf (f, "\tmemory\t%li", totalAllocated) ;   
       fputc ('\n', f) ;
     }
   else

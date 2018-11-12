@@ -10,7 +10,7 @@
 		will work on fil == stdin
  * Exported functions: readSequence, writeSequence, seqConvert, readFastq, writeFastq
  * HISTORY:
- * Last edited: Jul 25 11:24 2018 (rd)
+ * Last edited: Nov 11 16:31 2018 (rd109)
  * * Oct 22 17:30 2008 (rd): added desc to read/writeFastq
  * * Jul 29 22:42 2008 (rd): added writeFastq
  * * Oct 22 06:45 2006 (rd): added readFastq
@@ -575,4 +575,5 @@ int noConv[] = {
   96,  97,  98,  99, 100, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111,
  112, 113, 114, 115, 116, 117, 118, 119, 120, 121, 122, 123, 124, 125, 126, 127
 } ;
+
 /**************** end of file ***************/
