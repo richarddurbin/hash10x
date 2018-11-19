@@ -5,7 +5,7 @@
  * Description: buffered package to read arbitrary sequence files - much faster than readseq
  * Exported functions:
  * HISTORY:
- * Last edited: Nov 12 21:01 2018 (rd109)
+ * Last edited: Nov 17 16:47 2018 (rd109)
  * Created: Fri Nov  9 00:21:21 2018 (rd109)
  *-------------------------------------------------------------------
  */
@@ -114,12 +114,13 @@ BOOL seqIOread (SeqIO *si)
       si->nb -= 3*sizeof(int) ;
       int nBytes = si->idLen+1 + si->descLen+1
 	+ (si->seqLen+3)/4 + si->isQual ? (si->seqLen+7)/8 : 0 ;
-      bufConfirmNbytes (si, 4*((nBytes+3)/4)) ;
+      nBytes = 4*((nBytes+3)/4) ;
+      bufConfirmNbytes (si, nBytes) ;
       si->idStart = si->b - si->buf ;
       si->descStart = si->idStart + si->idLen+1 ;
       if (si->seqLen > si->seqBufSize)
 	{ if (si->seqBufSize) { free (si->seqBuf) ; if (si->isQual) free (si->qualBuf) ; }
-	  si->seqBufSize = 1 << 22 ; while (si->seqBufSize < si->seqLen) si->seqBufSize <<= 1 ;
+	  si->seqBufSize = 1 << 20 ; while (si->seqBufSize < si->seqLen) si->seqBufSize <<= 1 ;
 	  si->seqBuf = new (si->seqBufSize, char) ;
 	  if (si->isQual) si->qualBuf = new (si->seqBufSize, char) ;
 	}
@@ -130,6 +131,7 @@ BOOL seqIOread (SeqIO *si)
 	  sqioQualUnpack ((U8*)(si->buf+si->qualStart), si->qualBuf, si->seqLen, si->qualThresh) ;
 	}
       ++si->nSeq ;
+      si->b += nBytes ; si->nb -= nBytes ;
       return TRUE ;
     }
 

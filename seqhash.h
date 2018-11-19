@@ -5,7 +5,7 @@
  * Description: header file for seqhash package - minimizers and moshers
  * Exported functions: see below
  * HISTORY:
- * Last edited: Nov  7 13:42 2018 (rd109)
+ * Last edited: Nov 16 22:48 2018 (rd109)
  * Created: Mon Mar  5 08:43:45 2018 (rd)
  *-------------------------------------------------------------------
  */

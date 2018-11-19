@@ -5,7 +5,7 @@
  * Description:
  * Exported functions:
  * HISTORY:
- * Last edited: Nov 12 21:09 2018 (rd109)
+ * Last edited: Nov 12 21:27 2018 (rd109)
  * Created: Sun Nov 11 17:21:40 2018 (rd109)
  *-------------------------------------------------------------------
  */
@@ -36,22 +36,22 @@ int main (int argc, char *argv[])
 	  while (q < e) ++totQual[*q++] ;
 	}
     }
-  printf ("%s file, %lld sequences >= 0, %lld total, %.2f average\n",
+  printf ("%s file, %llu sequences >= 0, %llu total, %.2f average\n",
 	  typeName[si->type], si->nSeq, totLen, totLen / (double) si->nSeq) ;
   int i ;
   U64 totUnprint = 0 ;
   printf ("bases\n") ;
   for (i = 0 ; i < 256 ; ++i)
     if (totBase[i])
-      { if (isprint(i)) printf ("  %c %lld %4.1f %%\n", i, totBase[i], totBase[i]*100.0/totLen) ;
+      { if (isprint(i)) printf ("  %c %llu %4.1f %%\n", i, totBase[i], totBase[i]*100.0/totLen) ;
 	else totUnprint += totBase[i] ;
       }
-  if (totUnprint) printf (" unprintable %lld %4.1f %%\n", totUnprint, totUnprint*100.0/totLen) ;
+  if (totUnprint) printf (" unprintable %llu %4.1f %%\n", totUnprint, totUnprint*100.0/totLen) ;
 
   if (si->isQual)
     { printf ("qualities\n") ;
       for (i = 0 ; i < 256 ; ++i)
-	if (totQual[i]) printf (" %3d %lld %4.1f %%\n", i, totQual[i], totQual[i]*100.0/totLen) ;
+	if (totQual[i]) printf (" %3d %llu %4.1f %%\n", i, totQual[i], totQual[i]*100.0/totLen) ;
     }
   
   seqIOclose (si) ;

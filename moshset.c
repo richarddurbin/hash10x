@@ -5,7 +5,7 @@
  * Description: package to handle sets of "mosh" sequence hashes
  * Exported functions:
  * HISTORY:
- * Last edited: Nov  6 21:58 2018 (rd109)
+ * Last edited: Nov 18 08:58 2018 (rd109)
  * Created: Tue Nov  6 17:31:14 2018 (rd109)
  *-------------------------------------------------------------------
  */
@@ -25,6 +25,7 @@ Moshset *moshsetCreate (Seqhash *sh, int bits, U32 size)
   else if (size) ms->size = size ;
   else ms->size = (ms->tableSize >> 2) - 1 ;
   ms->value = new (ms->size, U64) ;
+  ms->depth = new0 (ms->size, U16) ;
   ms->info = new0 (ms->size, U8) ;
   return ms ;
 }
@@ -32,10 +33,13 @@ Moshset *moshsetCreate (Seqhash *sh, int bits, U32 size)
 void moshsetDestroy (Moshset *ms)
 { free (ms->index) ; free (ms->value) ; free (ms->info) ; free (ms) ; }
 
-void moshsetPack (Moshset *ms)	/* compress per-item arrays */
-{ ms->size = ms->max+1 ;
+BOOL moshsetPack (Moshset *ms)	/* compress per-item arrays */
+{ if (ms->size == ms->max+1) return FALSE ;
+  ms->size = ms->max+1 ;
   resize (ms->value, ms->size, U64) ;
+  resize (ms->depth, ms->size, U16) ;
   resize (ms->info, ms->size, U8) ;
+  return TRUE ;
 }
 
 U32 moshsetIndexFind (Moshset *ms, U64 hash, int isAdd)
@@ -56,18 +60,29 @@ U32 moshsetIndexFind (Moshset *ms, U64 hash, int isAdd)
   return index ;
 }
 
-void moshsetDepthPrune (Moshset *ms, U32 *depth, int min, int max)
+void moshsetDepthPrune (Moshset *ms, int min, int max)
 {
   U32 i ;
   U32 N = ms->max ; ms->max = 0 ;
   memset (ms->index, 0, ms->tableSize*sizeof(U32)) ;
   for (i = 1 ; i <= N ; ++i)	/* NB index runs from 1..max */
-    if (depth[i] >= min && (!max || depth[i] <= max))
+    if (ms->depth[i] >= min && (!max || ms->depth[i] < max))
       { moshsetIndexFind (ms, ms->value[i], TRUE) ;
-	depth[ms->max] = depth[i] ;
 	ms->info[ms->max] = ms->info[i] ;
+	ms->depth[ms->max] = ms->depth[i] ;
       }
-  fprintf (stderr, "  pruned Moshset from %d to %d with min %d max %d\n", N, ms->max, min, max) ;
+  fprintf (stderr, "  pruned Moshset from %d to %d with min %d <= depth < max %d\n",
+	   N, ms->max, min, max) ;
+}
+
+void moshsetDepthSetCopy (Moshset *ms, int copy1min, int copy2min, int copyMmin)
+{
+  U32 i ;
+  for (i = 1 ; i <= ms->max ; ++i)
+    if (ms->depth[i] < copy1min) msSetCopy0(ms,i) ;
+    else if (ms->depth[i] < copy2min) msSetCopy1(ms,i) ;
+    else if (ms->depth[i] < copyMmin) msSetCopy2(ms,i) ;
+    else msSetCopyM(ms,i) ;
 }
 
 void moshsetWrite (Moshset *ms, FILE *f)
@@ -77,6 +92,7 @@ void moshsetWrite (Moshset *ms, FILE *f)
   seqhashWrite (ms->hasher, f) ;
   if (fwrite (ms->index,sizeof(U32),ms->tableSize,f) != ms->tableSize) die ("fail write index") ;
   if (fwrite (ms->value,sizeof(U64),ms->max+1,f) != ms->max+1) die ("failed to write value") ;
+  if (fwrite (ms->depth,sizeof(U16),ms->max+1,f) != ms->max+1) die ("failed to write depth") ;
   if (fwrite (ms->info,sizeof(U8),ms->max+1,f) != ms->max+1) die ("failed to write info") ;
 }
 
@@ -90,9 +106,50 @@ Moshset *moshsetRead (FILE *f)
   Moshset *ms = moshsetCreate (sh, bits, size) ;
   if (fread (ms->index,sizeof(U32),ms->tableSize,f) != ms->tableSize) die ("failed read index") ;
   if (fread (ms->value,sizeof(U64),size,f) != size) die ("failed to read value") ;
+  if (fread (ms->depth,sizeof(U16),size,f) != size) die ("failed to read depth") ;
   if (fread (ms->info,sizeof(U8),size,f) != size) die ("failed to read info") ;
   ms->max = size - 1 ;
   return ms ;
+}
+
+BOOL moshsetMerge (Moshset *ms1, Moshset *ms2)
+{
+  U32 i, index ;
+  /* first check that the hashers are identical */
+  Seqhash *sh1 = ms1->hasher, *sh2 = ms2->hasher ;
+  if (sh1->w != sh2->w || sh1->k != sh2->k || sh1->factor1 != sh2->factor1) return FALSE ;
+  /* then pass through ms2 adding into ms1 */
+  for (i = 1 ; i <= ms2->max ; ++i)
+    { index = moshsetIndexFind (ms1, ms2->value[i], TRUE) ;
+      U32 d = ms1->depth[index] + (U32) ms2->depth[i] ; if (d > U16MAX) d = U16MAX ;
+      ms1->depth[index] = d ;
+      int c = msCopy(ms1,index) + msCopy(ms2,i) ; if (c > 3) c = 3 ;
+      ms1->info[index] &= 0x3 ; ms1->info[index] |= c ;
+    }
+  return TRUE ;
+}
+
+void moshsetSummary (Moshset *ms, FILE *f)
+{
+  fprintf (f, "MS table size %llu number of entries %u", ms->tableSize, ms->max) ;
+  if (!ms->max) return ;
+  U32 i, copy[4] ; copy[0] = copy[1] = copy[2] = copy[3] = 0 ;
+  Array h = arrayCreate (256, U32) ;
+  for (i = 1 ; i <= ms->max ; ++i)
+    { if (ms->depth[i] < arrayMax(h)) ++arr(h,ms->depth[i],U32) ; /* more efficient to check */
+      else ++array(h,ms->depth[i],U32) ;
+      ++copy[msCopy(ms,i)] ;
+    }
+  U64 sum = 0, tot = 0, ptot = 0 ;
+  for (i = 0 ; i < arrayMax(h) ; ++i) { sum += arr(h,i,U32) ; tot += i * arr(h,i,U32) ; }
+  ptot = tot / 2 ;
+  for (i = 0 ; i < arrayMax(h) ; ++i) if ((ptot -= i*arr(h,i,U32)) < 0) break ;
+  fprintf (f, " total count %llu\nMS average depth %.1f N50 depth %u",
+	   tot, tot / (double)sum , i) ;
+  if (copy[0] < ms->max)
+    fprintf (f, " copy0 %u copy1 %u copy2 %u copyM %u", copy[0], copy[1], copy[2], copy[3]) ;
+  fputc ('\n', f) ;
+  arrayDestroy (h) ;
 }
 
 /***************************************************/

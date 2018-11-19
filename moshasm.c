@@ -5,7 +5,7 @@
  * Description:
  * Exported functions:
  * HISTORY:
- * Last edited: Nov 11 17:18 2018 (rd109)
+ * Last edited: Nov 19 10:47 2018 (rd109)
  * Created: Tue Nov  6 18:30:49 2018 (rd109)
  *-------------------------------------------------------------------
  */
@@ -28,23 +28,22 @@ typedef struct {
   int nHit ;
   int nMiss ;
   int nCopy[4] ;		/* number of copy 0, 1, 2, M hits */
-  int contained ;		/* outermost copy 1 hits are contained in this */
+  int contained ;		/* the current read seems to be fully contained in this one */
 } RSinfo ;
 
 typedef struct {		/* data structure for long read set */
   Moshset *ms ;
-  int n ;
-  U32* depth ;			/* indexed by ms; size ms->size */
+  int   n ;
   Array info ;			/* of RSinfo */
   Array hits ;			/* of lists of U32 indexes into ms */
   Array pos ;			/* of lists of U32 positions of hits */
+  U32   **inv ;			/* inverse array, for each mosh, a pointer to the list of reads */
 } Readset ;
 
 Readset *readsetCreate (Moshset *ms)
 {
   Readset *rs = new0 (1, Readset) ;
   rs->ms = ms ;
-  rs->depth = new0 (ms->size, U32) ;
   rs->info = arrayCreate (1<<16, RSinfo) ;
   rs->hits = arrayCreate (1<<16, U32*) ;
   rs->pos = arrayCreate (1<<16, U32*) ;
@@ -53,7 +52,6 @@ Readset *readsetCreate (Moshset *ms)
 
 void readsetDestroy (Readset *rs)
 {
-  free (rs->depth) ;
   arrayDestroy (rs->info) ;
   int i ;
   for (i = 0 ; i < rs->n ; ++i)
@@ -69,7 +67,6 @@ void readsetWrite (Readset *rs, char *root)
   if (!(f = fopenTag (root, "readset", "w"))) die ("can't open file %s.readset", root) ;
   if (fwrite("RSMSHv1",8,1,f) != 1) die ("failed to write readset header") ;
   if (fwrite (&rs->n,sizeof(U32),1,f) != 1) die ("failed to write n") ;
-  if (fwrite(rs->depth,sizeof(U32),rs->ms->size,f) != rs->ms->size) die ("failed write depth") ;
   arrayWrite (rs->info, f) ;
   int i, n ;
   for (i = 0 ; i < rs->n ; ++i)
@@ -91,7 +88,6 @@ Readset *readsetRead (char *root)
   if (fread (name,8,1,f) != 1) die ("failed to read readset header") ;
   if (strcmp (name, "RSMSHv1")) die ("bad readset header") ;
   if (fread (&rs->n,sizeof(U32),1,f) != 1) die ("failed to read n") ;
-  if (fread(rs->depth,sizeof(U32),rs->ms->size,f) != rs->ms->size) die ("failed write depth") ;
   arrayDestroy (rs->info) ; rs->info = arrayRead (f) ;
   int i, n ;
   for (i = 0 ; i < rs->n ; ++i)
@@ -105,13 +101,14 @@ Readset *readsetRead (char *root)
   return rs ;
 }
 
-void readsetFastaRead (Readset *rs, char *filename)
+void readsetFileRead (Readset *rs, char *filename)
 {
   char *seq ;			/* ignore the name for now */
   int len ;
   Array hitsA = arrayCreate (1024, U32) ; /* reuse these to build the lists of hits and posns */
   Array posA = arrayCreate (1024, U32) ;
-  
+
+  memset (rs->ms->depth, 0, (rs->ms->max+1)*sizeof(U16)) ; /* rebuild depth from this file */
   dna2indexConv['N'] = dna2indexConv['n'] = 0 ; /* to get 2-bit encoding */
   SeqIO *si = seqIOopen (filename, dna2indexConv, FALSE) ;
   while (seqIOread (si))
@@ -128,16 +125,16 @@ void readsetFastaRead (Readset *rs, char *filename)
 	      array(posA,info->nHit,U32) = pos ;
 	      ++info->nCopy[msCopy(rs->ms,index)] ;
 	      ++info->nHit ;
-	      ++rs->depth[index] ;
+	      U16 *di = &rs->ms->depth[index] ; ++*di ; if (!*di) *di = U16MAX ;
 	    }
 	  else ++info->nMiss ;
 	}
       seqhashRCiteratorDestroy (mi) ;
       if (info->nHit)
 	{ U32 *x = array(rs->hits,rs->n,U32*) = new(info->nHit,U32) ;
-	  memcpy (x, arrp(hitsA,0,U32), info->nHit) ;
+	  memcpy (x, arrp(hitsA,0,U32), info->nHit*sizeof(U32)) ;
 	  x = array(rs->pos,rs->n,U32*) = new(info->nHit,U32) ;
-	  memcpy (x, arrp(posA,0,U32), info->nHit) ;
+	  memcpy (x, arrp(posA,0,U32), info->nHit*sizeof(U32)) ;
 	}
       ++rs->n ;
     }
@@ -162,34 +159,62 @@ void readsetStats (Readset *rs)
       totLen += info->len ;
       totHit += info->nHit ;
       totMiss += info->nMiss ;
-      for (j = 1 ; j < 4 ; ++j) totCopy[j] += info->nCopy[j] ;
+      for (j = 0 ; j < 4 ; ++j) totCopy[j] += info->nCopy[j] ;
       if (info->nCopy[1] == 0) { ++nUnique0 ; lenUnique0 += info->len ; }
       else if (info->nCopy[1] == 1) { ++nUnique1 ; lenUnique1 += info->len ; }
     }
-  fprintf (outFile, "RS %d sequences, total length %lld (av %.1f)\n",
+  fprintf (outFile, "RS %d sequences, total length %llu (av %.1f)\n",
 	   rs->n, totLen, totLen/(double)rs->n) ;
-  fprintf (outFile, "RS %lld mosh hits (%.1f bp/hit), frac hit %.2f\n",
-	   totHit, totLen/(double)totHit, totHit/(double)(totMiss+totHit)) ;
-  fprintf (outFile, "RS hit distribution %.2f copy1, %.2f copy2, %.2f copyM\n",
-	   totCopy[1]/(double)totHit, totCopy[2]/(double)totHit, totCopy[3]/(double)totHit) ;
-  fprintf (outFile, "RS %d with 0 unique hits, av length %.1f\n",
-	   nUnique0, lenUnique0/(double)nUnique0) ;
-  fprintf (outFile, "RS %d with 1 unique hits, av length %.1f\n",
-	   nUnique1, lenUnique1/(double)nUnique1) ;
-
+  fprintf (outFile, "RS %llu mosh hits, %.1f bp/hit, frac hit %.2f, av hits/read %.1f\n",
+	   totHit, totLen/(double)totHit, totHit/(double)(totMiss+totHit),
+	   totHit/(double)rs->n) ;
+  fprintf (outFile, "RS hit distribution %.2f copy0, %.2f copy1, %.2f copy2, %.2f copyM\n",
+	   totCopy[0]/(double)totHit, totCopy[1]/(double)totHit,
+	   totCopy[2]/(double)totHit, totCopy[3]/(double)totHit) ;
+  U32 nUniqueMulti = rs->n - nUnique0 - nUnique1 ;
+  fprintf (outFile, "RS num reads and av_len with 0 copy1 hits %d %.1f with 1 copy1 hits %d %.1f"
+	   " >1 copy1 hits %d %.1f av copy1 hits %.1f\n",
+	   nUnique0, lenUnique0/(double)nUnique0, nUnique1, lenUnique1/(double)nUnique1,
+	   nUniqueMulti, (totLen - lenUnique0 - lenUnique1)/(double)nUniqueMulti,
+	   (totCopy[1]-nUnique1)/(double)nUniqueMulti) ;
   U32 nCopy[4], hitCopy[4], hit2Copy[4] ;
   U64 depthCopy[4] ;
   for (j = 0 ; j < 4 ; ++j) nCopy[j] = hitCopy[j] = hit2Copy[j] = depthCopy[j] = 0 ;
   for (i = 1 ; i <= rs->ms->max ; ++i)
     { j = msCopy(rs->ms,i) ;
       ++nCopy[j] ;
-      if (rs->depth[i] > 0) ++hitCopy[j] ;
-      if (rs->depth[i] > 1) { ++hit2Copy[j] ; depthCopy[j] += rs->depth[i] ; }
+      if (rs->ms->depth[i] > 0) ++hitCopy[j] ;
+      if (rs->ms->depth[i] > 1) { ++hit2Copy[j] ; depthCopy[j] += rs->ms->depth[i] ; }
     }
-  fprintf (outFile, "RS frac hit, hit>1 (av) per mosh: copy1 %.2f, %.2f (%.1f), copy2 %.2f, %.2f (%.1f), copyM %.2f, %.2f (%.1f)\n", 
+  fprintf (outFile, "RS mosh frac hit hit>1 av: copy0 %.3f %.3f %.1f copy1 %.3f %.3f %.1f copy2 %.3f %.3f %.1f copyM %.3f %.3f %.1f\n", 
+   hitCopy[0]/(double)nCopy[0], hit2Copy[0]/(double)nCopy[0], depthCopy[0]/(double)hit2Copy[0], 
    hitCopy[1]/(double)nCopy[1], hit2Copy[1]/(double)nCopy[1], depthCopy[1]/(double)hit2Copy[1], 
    hitCopy[2]/(double)nCopy[2], hit2Copy[2]/(double)nCopy[2], depthCopy[2]/(double)hit2Copy[2], 
    hitCopy[3]/(double)nCopy[3], hit2Copy[3]/(double)nCopy[3], depthCopy[3]/(double)hit2Copy[3]) ;
+}
+
+/************************************************************/
+
+typedef struct {
+  int nHit ;
+  int j0, jn ;			/* first and last hit offsets in query */
+} Overlap ;
+
+void findOverlaps (Readset *rs, U32 i)
+{
+  RSinfo *rsi = arrp(rs->info, i, RSinfo) ;
+  int j, k ;
+  U32 *h = arr(rs->hits,i,U32*), *p = arr(rs->hits,i,U32*) ;
+  Overlap *olap = new0(rs->n,Overlap) ;
+  for (j = 0 ; j < rsi->nHit ; ++j, ++h, ++p)
+    if (msIsCopy1 (rs->ms, *h))
+      { U32 *r2 = rs->inv[*h] ;
+	for (k = 0 ; k < rs->ms->depth[*h] ; ++k, ++r2)
+	  { Overlap *o = &olap[*r2] ;
+	    if (!o->nHit++) o->j0 = j ;
+	    o->jn = j ;
+	  }
+      }
 }
 
 /************************************************************/
@@ -200,11 +225,12 @@ void usage (void)
   fprintf (stderr, "  -v | --verbose : toggle verbose mode\n") ;
   fprintf (stderr, "  -t | --threads <number of threads for parallel ops> [%d]\n", numThreads) ;
   fprintf (stderr, "  -o | --output <output filename> : '-' for stdout\n") ;
-  fprintf (stderr, "  -m | --mosh <mosh file>\n") ;
-  fprintf (stderr, "  -f | --fasta <fasta file of reads>\n") ;
+  fprintf (stderr, "  -m | --moshset <mosh file>\n") ;
+  fprintf (stderr, "  -f | --seqfile <file of reads: fasta/q, can be gzipped, or binary>\n") ;
   fprintf (stderr, "  -w | --write <file stem> : writes assembly files\n") ;
   fprintf (stderr, "  -r | --read <file stem> : read assembly files\n") ;
   fprintf (stderr, "  -S | --stats : give readset stats\n") ;
+  fprintf (stderr, "  -a1 | --assembly1 : find maximal overlaps / containments &\n") ;
 }
 
 int main (int argc, char *argv[])
@@ -253,15 +279,16 @@ int main (int argc, char *argv[])
 	    outFile = stdout ;
 	  }
       }
-    else if (ARGMATCH("-m","--mosh",2))
+    else if (ARGMATCH("-m","--moshset",2))
       { if (!(f = fopen (argv[-1], "r"))) die ("failed to open mosh file %s", argv[-1]) ;
+	if (ms) moshsetDestroy (ms) ;
 	ms = moshsetRead (f) ;
       }
     else if (ARGMATCH("-f","--seqfile",2))
       { if (ms)
 	  { if (rs) readsetDestroy (rs) ;
 	    rs = readsetCreate (ms) ;
-	    readsetFastaRead (rs, argv[-1]) ;
+	    readsetFileRead (rs, argv[-1]) ;
 	    fclose (f) ;
 	  }
 	else fprintf (stderr, "** need to read a moshset before a fasta file\n") ;
