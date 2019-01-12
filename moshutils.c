@@ -5,7 +5,7 @@
  * Description:
  * Exported functions:
  * HISTORY:
- * Last edited: Jan  2 22:00 2019 (rd109)
+ * Last edited: Jan 12 13:45 2019 (rd109)
  * Created: Wed Nov 14 22:31:47 2018 (rd109)
  *-------------------------------------------------------------------
  */
@@ -40,7 +40,7 @@ static BOOL addSequenceFile (Moshset *ms, char *filename, BOOL is10x)
   if (!si) return FALSE ;
   while (seqIOread (si))
     { ++nSeq ; totLen += si->seqLen ;
-      if (is10x) totHash += addSequence (ms, sqioSeq(si)+23, si->seqLen-23) ;
+      if (is10x && (nSeq & 0x1)) totHash += addSequence (ms, sqioSeq(si)+23, si->seqLen-23) ;
       else totHash += addSequence (ms, sqioSeq(si), si->seqLen) ;
     }
   seqIOclose (si) ;
@@ -49,7 +49,7 @@ static BOOL addSequenceFile (Moshset *ms, char *filename, BOOL is10x)
   return TRUE ;
 }
 
-void depthHistogram (Moshset *ms)
+void depthHistogram (Moshset *ms, FILE *f)
 {
   Array h = arrayCreate (256, U32) ;
   U32 i ;
@@ -57,21 +57,21 @@ void depthHistogram (Moshset *ms)
     if (ms->depth[i] < arrayMax(h)) ++arr(h,ms->depth[i],U32) ; /* more efficient to check */
     else ++array(h,ms->depth[i],U32) ;
   for (i = 0 ; i < arrayMax(h) ; ++i)
-    if (arr(h,i,U32)) fprintf (outFile, "DP\t%u\t%u\n", i, arr(h,i,U32)) ;
+    if (arr(h,i,U32)) fprintf (f, "DP\t%u\t%u\n", i, arr(h,i,U32)) ;
   arrayDestroy (h) ;
 }
 
-void reportDepths (Moshset *ms, Array ma)
+void reportDepths (Moshset *ms, Array ma, FILE *f)
 {
   U32 i, j, index ;
   for (i = 1 ; i <= ms->max ; ++i)
-    { fprintf (outFile, "MH\t%llx\t%d\t%u", ms->value[i], msCopy(ms,i), ms->depth[i]) ;
+    { fprintf (f, "MH\t%llx\t%d\t%u", ms->value[i], msCopy(ms,i), ms->depth[i]) ;
       for (j = 0 ; j < arrayMax(ma) ; ++j)
 	if ((index = moshsetIndexFind (arr(ma,j,Moshset*), ms->value[i], FALSE)))
-	  fprintf (outFile, "\t%u", arr(ma,j,Moshset*)->depth[index]) ;
+	  fprintf (f, "\t%u", arr(ma,j,Moshset*)->depth[index]) ;
 	else
-	  fprintf (outFile, "\t.") ;
-      fputc ('\n', outFile) ;
+	  fprintf (f, "\t0") ;
+      fputc ('\n', f) ;
     }
 }
 
@@ -89,8 +89,8 @@ void usage (void)
   fprintf (stderr, "  -p | --prune <min> <max> : remove mosh entries < min or >= max\n") ;
   fprintf (stderr, "  -s | --setcopy <copy1min> <copy2min> <copyMmin> : reset mosh copy\n") ;
   fprintf (stderr, "  -sM | --setcopyM <copyMmin> : set copyM if depth > copyMmin\n") ;
-  fprintf (stderr, "  -H | --hist : print depth histogram\n") ;
-  fprintf (stderr, "  -d | --depth <mosh file>* : print depth per mosh [also in other files]\n") ;
+  fprintf (stderr, "  -H | --hist <outfile> : print depth histogram\n") ;
+  fprintf (stderr, "  -d | --depth <outfile> <mosh file>* : print depth per mosh [also in other files]\n") ;
   fprintf (stderr, "command -c or -r must come before other commands from -w onwards\n") ;
   fprintf (stderr, "read files can be fasta or fastq, gzipped or not\n") ;
   fprintf (stderr, "example usage\n") ;
@@ -156,7 +156,7 @@ int main (int argc, char *argv[])
 	ms = moshsetRead (f) ;
 	fclose (f) ;
 	seqhashReport (ms->hasher, outFile) ;
-	moshsetSummary (ms, outFile) ;
+	fprintf (outFile, "read ") ; moshsetSummary (ms, outFile) ;
       }
     else if (ms && ARGMATCH("-w","--write",2))
       { if (!(f = fopen (argv[-1], "w"))) die ("failed to open mosh file %s", argv[-1]) ;
@@ -165,7 +165,7 @@ int main (int argc, char *argv[])
       }
     else if (ms && ARGMATCH("-p","--prune",3))
       { moshsetDepthPrune (ms, atoi(argv[-2]), atoi(argv[-1])) ;
-	moshsetSummary (ms, outFile) ;
+	fprintf (outFile, "prune ") ; moshsetSummary (ms, outFile) ;
       }
     else if (ms && ARGMATCH("-s","--setcopy",4))
       { int copy1min = atoi(argv[-3]), copy2min = atoi(argv[-2]), copyMmin = atoi(argv[-1]) ;
@@ -176,44 +176,52 @@ int main (int argc, char *argv[])
 	  else if (ms->depth[u] < copyMmin) msSetCopy2(ms,u) ;
 	  else msSetCopyM(ms,u) ;
 
-	moshsetSummary (ms, outFile) ;
+	fprintf (outFile, "setcopy ") ; moshsetSummary (ms, outFile) ;
       }
     else if (ms && ARGMATCH("-sM","--setcopyM",2))
       { int copyMmin = atoi(argv[-1]) ;
 	U32 u ; for (u = 1 ; u <= ms->max ; ++u) if (ms->depth[u] >= copyMmin) msSetCopyM(ms,u) ;
-	moshsetSummary (ms, outFile) ;
+	fprintf (outFile, "setcopyM ") ; moshsetSummary (ms, outFile) ;
       }
     else if (ms && ARGMATCH("-a","--add",2))
       { if (!addSequenceFile (ms, argv[-1], FALSE))
 	  die ("failed to open sequence file %s", argv[-1]) ;
-	moshsetSummary (ms, outFile) ;
+	fprintf (outFile, "add ") ; moshsetSummary (ms, outFile) ;
       }
     else if (ms && ARGMATCH("-x","--add10x",2))
       { if (!addSequenceFile (ms, argv[-1], TRUE))
 	  die ("failed to open sequence file %s", argv[-1]) ;
-	moshsetSummary (ms, outFile) ;
+	fprintf (outFile, "add10x ") ; moshsetSummary (ms, outFile) ;
       }
     else if (ms && ARGMATCH ("-m","--merge",2))
       { if (!(f = fopen (argv[-1], "r"))) die ("failed to open mosh file %s", argv[-1]) ;
 	Moshset *ms2 = moshsetRead (f) ;
+	fprintf (outFile, "read ") ; moshsetSummary (ms2, outFile) ;
 	fclose (f) ;
 	if (!moshsetMerge (ms, ms2))
 	  fprintf (stderr, "moshset %s incompatible with current - unable to merge\n", argv[-1]) ;
 	moshsetDestroy (ms2) ;
-	moshsetSummary (ms, outFile) ;
+	fprintf (outFile, "merge ") ; moshsetSummary (ms, outFile) ;
       }
-    else if (ms && ARGMATCH ("-H","--hist",1))
-      depthHistogram (ms) ;
-    else if (ms && ARGMATCH ("-d","--depths",1))
-      { Array ma = arrayCreate (32, Moshset*) ;
+    else if (ms && ARGMATCH ("-H","--hist",2))
+      { if (!(f = fopen (argv[-1], "w"))) die ("failed to open histogram file %s", argv[-1]) ;
+       depthHistogram (ms, f) ;
+       fclose (f) ;
+      }
+    else if (ms && ARGMATCH ("-d","--depths",2))
+      { FILE *fd ;
+	if (!(fd = fopen (argv[-1], "w"))) die ("failed to open depths file %s", argv[-1]) ;
+	Array ma = arrayCreate (32, Moshset*) ;
 	while (argc && **argv != '-')
 	  { if (!(f = fopen (*argv, "r"))) die ("failed to open mosh file %s", *argv) ;
 	    array(ma,arrayMax(ma),Moshset*) = moshsetRead (f) ;
+	    fprintf (outFile, "read ") ; moshsetSummary (arr(ma,arrayMax(ma)-1,Moshset*), outFile) ;
 	    fclose (f) ;
 	    --argc ; ++argv ;
 	  }
-	reportDepths (ms, ma) ;
+	reportDepths (ms, ma, fd) ;
 	arrayDestroy (ma) ;
+	fclose (fd) ;
       }
     else die ("unknown command %s - run without arguments for usage", *argv) ;
 
