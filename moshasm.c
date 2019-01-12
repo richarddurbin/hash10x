@@ -5,58 +5,80 @@
  * Description:
  * Exported functions:
  * HISTORY:
- * Last edited: Nov 19 10:47 2018 (rd109)
+ * Last edited: Jan 12 12:51 2019 (rd109)
+ * * Jan  4 00:14 2019 (rd109): completed findOverlaps and markBadReads and cleaned Read object
  * Created: Tue Nov  6 18:30:49 2018 (rd109)
  *-------------------------------------------------------------------
  */
 
 #include "moshset.h"
 #include "seqio.h"
+#include <math.h>
 
 #ifdef OMP
 #include <omp.h>
 #endif
 
+#define TOPBIT  0x80000000	/* set for FORWARD orientation, unset for reverse orientation */
+#define TOPMASK 0x7fffffff
+
 int numThreads = 1 ;		/* default to serial - reset if multi-threaded */
 FILE *outFile ;			/* initialise to stdout at start of main() */
 BOOL isVerbose = FALSE ;
 
-/* drop the read names */
+/* drop the read names, and don't store the sequences: mosh indexes and spacings only */
 
 typedef struct {
-  int len ;
-  int nHit ;
-  int nMiss ;
-  int nCopy[4] ;		/* number of copy 0, 1, 2, M hits */
-  int contained ;		/* the current read seems to be fully contained in this one */
-} RSinfo ;
+  int len ;			/* sequence length in base pairs */
+  int nHit ;			/* number of ms moshes hit */
+  U32 *hit ;			/* list of hits (ms indexes, using top bit for orientation) */
+  U16 *dx ;	     		/* lists of distances to previous hit (increasing order) */
+  union {
+    U8 bad ;			/* allows single test for any type of bad read */
+    struct {
+      U8 badRepeat : 1 ;	/* contains repeated single copy mosh(es) */
+      U8 badOrder10 : 1 ;	/* matches 10 or more other reads in incorrect order */
+      U8 badOrder1 : 1 ;	/* matches 1 or more other good reads in incorrect order */
+      U8 badNoMatch : 1 ;	/* doesn't match any other reads on UNIQUE  */
+      U8 badLowHit : 1 ;	/* hit:miss ratio too low - below 5% */
+      U8 badLowCopy1 : 1 ;	/* low number of copy 1 hits */
+    } ;
+  } ;
+  U8 otherFlags ;		/* for future use */
+  U16 pad1 ;			/* for future use - to pad out flags to 32 bits */
+  int nMiss ;			/* number of moshes in sequence that miss ms */
+  int contained ;		/* index in rs->reads of read that contains this one */
+  int nCopy[4] ;		/* number of copy 0, 1, 2, M hits - could create on demand */
+  U32 pad2[4] ;			/* for future use */
+} Read ;
 
 typedef struct {		/* data structure for long read set */
   Moshset *ms ;
-  int   n ;
-  Array info ;			/* of RSinfo */
-  Array hits ;			/* of lists of U32 indexes into ms */
-  Array pos ;			/* of lists of U32 positions of hits */
-  U32   **inv ;			/* inverse array, for each mosh, a pointer to the list of reads */
+  Array reads ;			/* of Read */
+  U64   totHit ;	        /* total number of hits */
+  U32   **inv ;			/* inverse array: for each mosh, a pointer to a list of reads */
+  U32   *invSpace ;		/* inv[i] points into this */
 } Readset ;
 
-Readset *readsetCreate (Moshset *ms)
+static void invBuild (Readset *rs) ; /* forward declaration */
+
+Readset *readsetCreate (Moshset *ms, int n) /* create empty - n is used to initialise arrays */
 {
   Readset *rs = new0 (1, Readset) ;
   rs->ms = ms ;
-  rs->info = arrayCreate (1<<16, RSinfo) ;
-  rs->hits = arrayCreate (1<<16, U32*) ;
-  rs->pos = arrayCreate (1<<16, U32*) ;
+  rs->reads = arrayCreate (n, Read) ;
+  arrayp(rs->reads,0,Read)->nHit = 0 ; /* burn first read, so can use 0 as null */
+  /* create inv, invSpace in invBuild() */
   return rs ;
 }
 
 void readsetDestroy (Readset *rs)
 {
-  arrayDestroy (rs->info) ;
-  int i ;
-  for (i = 0 ; i < rs->n ; ++i)
-    if (arr(rs->hits,i,U32*)) { free(arr(rs->hits,i,U32*)) ; free(arr(rs->pos,i,U32*)) ; }
-  free (rs->hits) ; free (rs->pos) ; free (rs) ;
+  int i, n = arrayMax(rs->reads) ; Read *r = arrp(rs->reads,0,Read) ;
+  for (i = 0 ; i < n ; ++i, ++r) if (r->nHit) { free(r->hit) ; free(r->dx) ; }
+  arrayDestroy (rs->reads) ;
+  if (rs->inv) { free (rs->inv) ; free (rs->invSpace) ; }
+  free (rs) ;
 }
 
 void readsetWrite (Readset *rs, char *root)
@@ -65,14 +87,14 @@ void readsetWrite (Readset *rs, char *root)
   if (!(f = fopenTag (root, "mosh", "w"))) die ("can't open file %s.mosh", root) ;
   moshsetWrite (rs->ms, f) ; fclose (f) ;
   if (!(f = fopenTag (root, "readset", "w"))) die ("can't open file %s.readset", root) ;
-  if (fwrite("RSMSHv1",8,1,f) != 1) die ("failed to write readset header") ;
-  if (fwrite (&rs->n,sizeof(U32),1,f) != 1) die ("failed to write n") ;
-  arrayWrite (rs->info, f) ;
-  int i, n ;
-  for (i = 0 ; i < rs->n ; ++i)
-    if ((n = arrp(rs->info,i,RSinfo)->nHit))
-      { if (fwrite(arr(rs->hits,i,U32*),sizeof(U32),n,f) != n) die ("failed write hits %d", n) ;
-	if (fwrite(arr(rs->pos,i,U32*),sizeof(U32),n,f) != n) die ("failed write pos %d", n) ;
+  if (fwrite("RSMSHv2",8,1,f) != 1) die ("failed to write readset header") ;
+  if (fwrite (&rs->totHit,sizeof(U64),1,f) != 1) die ("failed to write totHit") ;
+  arrayWrite (rs->reads, f) ;
+  int i, n ; Read *r = arrp(rs->reads,0,Read) ;
+  for (i = 0 ; i < arrayMax(rs->reads) ; ++i, ++r)
+    if ((n = r->nHit))
+      { if (fwrite(r->hit,sizeof(U32),n,f) != n) die ("failed write hits %d", n) ;
+	if (fwrite(r->dx,sizeof(U16),n,f) != n) die ("failed write dx %d", n) ;
       }
   fclose (f) ;
 }
@@ -82,22 +104,21 @@ Readset *readsetRead (char *root)
   FILE *f ;
   if (!(f = fopenTag (root, "mosh", "r"))) die ("can't open file %s.mosh", root) ;
   Moshset *ms = moshsetRead (f) ; fclose (f) ;
-  Readset *rs = readsetCreate (ms) ;
   if (!(f = fopenTag (root, "readset", "r"))) die ("can't open file %s.readset", root) ;
   char name[8] ;
   if (fread (name,8,1,f) != 1) die ("failed to read readset header") ;
-  if (strcmp (name, "RSMSHv1")) die ("bad readset header") ;
-  if (fread (&rs->n,sizeof(U32),1,f) != 1) die ("failed to read n") ;
-  arrayDestroy (rs->info) ; rs->info = arrayRead (f) ;
-  int i, n ;
-  for (i = 0 ; i < rs->n ; ++i)
-    if ((n = arrp(rs->info,i,RSinfo)->nHit))
-      { arr(rs->hits,i,U32*) = new (n, U32) ;
-	if (fread(arr(rs->hits,i,U32*),sizeof(U32),n,f) != n) die ("failed read hits %d", n) ;
-	arr(rs->pos,i,U32*) = new (n, U32) ;
-	if (fread(arr(rs->pos,i,U32*),sizeof(U32),n,f) != n) die ("failed write pos %d", n) ;
+  if (strcmp (name, "RSMSHv2")) die ("bad readset header %s != RSMSHv2", name) ;
+  Readset *rs = readsetCreate (ms, 16) ;
+  if (fread (&rs->totHit,sizeof(U64),1,f) != 1) die ("failed to read totHit") ;
+  arrayDestroy (rs->reads) ; rs->reads = arrayRead (f) ;
+  int i, n ; Read *r = arrp(rs->reads,0,Read) ;
+  for (i = 0 ; i < arrayMax(rs->reads) ; ++i, ++r)
+    if ((n = r->nHit))
+      { r->hit = new (n, U32) ; if (fread(r->hit,sizeof(U32),n,f) != n) die ("failed read hits") ;
+	r->dx = new (n, U16) ;	if (fread(r->dx,sizeof(U16),n,f) != n) die ("failed read dx") ;
       }
   fclose (f) ;
+  invBuild (rs) ;
   return rs ;
 }
 
@@ -105,78 +126,93 @@ void readsetFileRead (Readset *rs, char *filename)
 {
   char *seq ;			/* ignore the name for now */
   int len ;
-  Array hitsA = arrayCreate (1024, U32) ; /* reuse these to build the lists of hits and posns */
-  Array posA = arrayCreate (1024, U32) ;
+  Array hitsA = arrayCreate (1024, U32) ; /* reuse these to build the lists of hits and dx */
+  Array dxA = arrayCreate (1024, U16) ;
 
   memset (rs->ms->depth, 0, (rs->ms->max+1)*sizeof(U16)) ; /* rebuild depth from this file */
   dna2indexConv['N'] = dna2indexConv['n'] = 0 ; /* to get 2-bit encoding */
   SeqIO *si = seqIOopen (filename, dna2indexConv, FALSE) ;
   while (seqIOread (si))
-    { RSinfo *info = arrp(rs->info, rs->n, RSinfo) ;
-      info->len = si->seqLen ;
+    { Read *read = arrayp(rs->reads, arrayMax(rs->reads), Read) ;
+      read->len = si->seqLen ;
       SeqhashRCiterator *mi = moshRCiterator (rs->ms->hasher, sqioSeq(si), si->seqLen) ;
       hitsA = arrayReCreate (hitsA, 1024, U32) ;
-      posA = arrayReCreate (posA, 1024, U32) ;
-      U64 hash ; int pos ;
-      while (moshRCnext (mi, &hash, &pos))
+      dxA = arrayReCreate (dxA, 1024, U16) ;
+      U64 hash ; int lastPos = 0, pos ; BOOL isForward ;
+      while (moshRCnext (mi, &hash, &pos, &isForward))
 	{ U32 index = moshsetIndexFind (rs->ms, hash, FALSE) ;
 	  if (index)
-	    { array(hitsA,info->nHit,U32) = index ;
-	      array(posA,info->nHit,U32) = pos ;
-	      ++info->nCopy[msCopy(rs->ms,index)] ;
-	      ++info->nHit ;
+	    { array(hitsA,read->nHit,U32) = isForward ? (index | TOPBIT) : index ;
+	      array(dxA,read->nHit,U16) = pos - lastPos ; lastPos = pos ;
+	      ++read->nHit ;
 	      U16 *di = &rs->ms->depth[index] ; ++*di ; if (!*di) *di = U16MAX ;
 	    }
-	  else ++info->nMiss ;
+	  else ++read->nMiss ;
 	}
       seqhashRCiteratorDestroy (mi) ;
-      if (info->nHit)
-	{ U32 *x = array(rs->hits,rs->n,U32*) = new(info->nHit,U32) ;
-	  memcpy (x, arrp(hitsA,0,U32), info->nHit*sizeof(U32)) ;
-	  x = array(rs->pos,rs->n,U32*) = new(info->nHit,U32) ;
-	  memcpy (x, arrp(posA,0,U32), info->nHit*sizeof(U32)) ;
+      if (read->nHit)
+	{ read->hit = new (read->nHit, U32) ;
+	  memcpy (read->hit, arrp(hitsA,0,U32), read->nHit*sizeof(U32)) ;
+	  read->dx = new(read->nHit,U16) ;
+	  memcpy (read->dx, arrp(dxA,0,U16), read->nHit*sizeof(U16)) ;
+	  rs->totHit += read->nHit ;
 	}
-      ++rs->n ;
     }
   seqIOclose (si) ;
 
-  arrayDestroy (hitsA) ; arrayDestroy (posA) ;
+  invBuild (rs) ;
+  arrayDestroy (hitsA) ; arrayDestroy (dxA) ;
 }
 
 void readsetStats (Readset *rs)
 {
-  if (!rs || !rs->n) { fprintf (stderr, "stats called on empty readset\n") ; return ; }
+  U32 n = arrayMax(rs->reads)-1 ;
+  if (!n) { fprintf (stderr, "stats called on empty readset\n") ; return ; }
 
-  seqhashReport (rs->ms->hasher, outFile) ;
+  moshsetSummary (rs->ms, outFile) ;
   
-  int i, j ;
+  U32 i, j ; 
   int nUnique0 = 0, nUnique1 = 0 ;
-  U64 totLen = 0, totHit = 0, totMiss = 0, lenUnique0 = 0, lenUnique1 = 0 ;
+  U64 totLen = 0, totMiss = 0, lenUnique0 = 0, lenUnique1 = 0 ;
   U64 totCopy[4] ; totCopy[0] = totCopy[1] = totCopy[2] = totCopy[3] = 0 ;
+  U32 nBad = 0, nBadRepeat = 0, nBadOrder10 = 0, nBadOrder1 = 0 ;
+  U32 nBadNoMatch = 0, nBadLowHit = 0, nBadLowCopy1 = 0 ;
   
-  for (i = 0 ; i < rs->n ; ++i)
-    { RSinfo *info = arrp(rs->info, i, RSinfo) ;
-      totLen += info->len ;
-      totHit += info->nHit ;
-      totMiss += info->nMiss ;
-      for (j = 0 ; j < 4 ; ++j) totCopy[j] += info->nCopy[j] ;
-      if (info->nCopy[1] == 0) { ++nUnique0 ; lenUnique0 += info->len ; }
-      else if (info->nCopy[1] == 1) { ++nUnique1 ; lenUnique1 += info->len ; }
+  for (i = 1 ; i <= n ; ++i)
+    { Read *read = arrp(rs->reads, i, Read) ;
+      totLen += read->len ;
+      totMiss += read->nMiss ;
+      for (j = 0 ; j < 4 ; ++j) totCopy[j] += read->nCopy[j] ;
+      if (read->nCopy[1] == 0) { ++nUnique0 ; lenUnique0 += read->len ; }
+      else if (read->nCopy[1] == 1) { ++nUnique1 ; lenUnique1 += read->len ; }
+      if (read->bad)
+	{ ++nBad ;
+	  if (read->badRepeat) ++nBadRepeat ;
+	  if (read->badOrder10) ++nBadOrder10 ;
+	  if (read->badOrder1) ++nBadOrder1 ;
+	  if (read->badNoMatch) ++nBadNoMatch ;
+	  if (read->badLowHit) ++nBadLowHit ;
+	  if (read->badLowCopy1) ++nBadLowCopy1 ;
+	}
     }
   fprintf (outFile, "RS %d sequences, total length %llu (av %.1f)\n",
-	   rs->n, totLen, totLen/(double)rs->n) ;
+	   n, totLen, totLen/(double)n) ;
   fprintf (outFile, "RS %llu mosh hits, %.1f bp/hit, frac hit %.2f, av hits/read %.1f\n",
-	   totHit, totLen/(double)totHit, totHit/(double)(totMiss+totHit),
-	   totHit/(double)rs->n) ;
+	   rs->totHit, totLen/(double)rs->totHit, rs->totHit/(double)(totMiss+rs->totHit),
+	   rs->totHit/(double)n) ;
   fprintf (outFile, "RS hit distribution %.2f copy0, %.2f copy1, %.2f copy2, %.2f copyM\n",
-	   totCopy[0]/(double)totHit, totCopy[1]/(double)totHit,
-	   totCopy[2]/(double)totHit, totCopy[3]/(double)totHit) ;
-  U32 nUniqueMulti = rs->n - nUnique0 - nUnique1 ;
+	   totCopy[0]/(double)rs->totHit, totCopy[1]/(double)rs->totHit,
+	   totCopy[2]/(double)rs->totHit, totCopy[3]/(double)rs->totHit) ;
+  U32 nUniqueMulti = n - nUnique0 - nUnique1 ;
   fprintf (outFile, "RS num reads and av_len with 0 copy1 hits %d %.1f with 1 copy1 hits %d %.1f"
 	   " >1 copy1 hits %d %.1f av copy1 hits %.1f\n",
 	   nUnique0, lenUnique0/(double)nUnique0, nUnique1, lenUnique1/(double)nUnique1,
 	   nUniqueMulti, (totLen - lenUnique0 - lenUnique1)/(double)nUniqueMulti,
 	   (totCopy[1]-nUnique1)/(double)nUniqueMulti) ;
+  fprintf (outFile, "RS bad %u : %u repeat, %u order10, %u order1, ",
+	   nBad, nBadRepeat, nBadOrder10, nBadOrder1) ;
+  fprintf (outFile, "%u no_match, %u low_hit, %u low_copy1\n",
+	   nBadNoMatch, nBadLowHit, nBadLowCopy1) ;
   U32 nCopy[4], hitCopy[4], hit2Copy[4] ;
   U64 depthCopy[4] ;
   for (j = 0 ; j < 4 ; ++j) nCopy[j] = hitCopy[j] = hit2Copy[j] = depthCopy[j] = 0 ;
@@ -193,28 +229,353 @@ void readsetStats (Readset *rs)
    hitCopy[3]/(double)nCopy[3], hit2Copy[3]/(double)nCopy[3], depthCopy[3]/(double)hit2Copy[3]) ;
 }
 
+static void invBuild (Readset *rs) /* run this after ms->depth built from reads->hit[] */
+{
+  Moshset *ms = rs->ms ;
+  U32 i, j ;
+  U64 offset = 0 ;
+  rs->inv = new0 (ms->max+1, U32*) ;
+  rs->invSpace = new (rs->totHit, U32) ;
+  for (i = 1 ; i <= ms->max ; ++i)
+    if (ms->depth[i] && ms->depth[i] < U16MAX)
+      { rs->inv[i] = rs->invSpace + offset ;
+	offset += ms->depth[i] ;
+      }
+  Read *read = arrp(rs->reads,1,Read) ;
+  for (i = 1 ; i < arrayMax(rs->reads) ; ++i, ++read)
+    { for (j = 0 ; j < 4 ; ++j) read->nCopy[j] = 0 ; /* build nCopy here in case msCopy changed */
+      U32 *x = read->hit ;
+      for (j = 0 ; j < read->nHit ; ++j, ++x)
+	{ U32 y = *x & TOPMASK ;
+	  ++read->nCopy[msCopy(rs->ms,y)] ;
+	  if (ms->depth[y] < U16MAX) *rs->inv[y]++ = i ; /* this is the inverse map */
+	}
+    }
+  offset = 0 ; /* now recreate rs->inv because we moved the pointers */
+  for (i = 1 ; i <= ms->max ; ++i)
+    if (ms->depth[i] && ms->depth[i] < U16MAX)
+      { rs->inv[i] = rs->invSpace + offset ;
+	offset += ms->depth[i] ;
+      }
+}
+
 /************************************************************/
 
 typedef struct {
-  int nHit ;
-  int j0, jn ;			/* first and last hit offsets in query */
+  U32 iy ;			/* index of overlap read in rs->reads */
+  int nHit ;			/* number of shared mosh hits */
+  int offset ;
+  BOOL isPlus ;			/* relative direction */
+  BOOL isBad ;
 } Overlap ;
 
-void findOverlaps (Readset *rs, U32 i)
+static int compareOverlap (const void* a, const void* b)
 {
-  RSinfo *rsi = arrp(rs->info, i, RSinfo) ;
-  int j, k ;
-  U32 *h = arr(rs->hits,i,U32*), *p = arr(rs->hits,i,U32*) ;
-  Overlap *olap = new0(rs->n,Overlap) ;
-  for (j = 0 ; j < rsi->nHit ; ++j, ++h, ++p)
-    if (msIsCopy1 (rs->ms, *h))
-      { U32 *r2 = rs->inv[*h] ;
-	for (k = 0 ; k < rs->ms->depth[*h] ; ++k, ++r2)
-	  { Overlap *o = &olap[*r2] ;
-	    if (!o->nHit++) o->j0 = j ;
-	    o->jn = j ;
-	  }
-      }
+  Overlap *oa = (Overlap*)a, *ob = (Overlap*)b ;
+  return (ob->nHit - oa->nHit) ;
+}
+
+/* in ~58k reads from SK1 
+   	around 5.5k have high nDeep - expected ~10% rDNA so OK
+	around 5k have low nHits - presumably rubbish, they are not short
+	around 2k have lots of bad reads (more than 5 or 10) and are corrupt - many have repeats
+	if we remove all these, there are ~1700 with a bad read - probably unfortunate errors
+   removing these we get ~42k good reads - lets try to assembly these
+*/
+
+Array findOverlaps (Readset *rs, Read *x, int reportLevel) /* returns array of Overlap */
+/* reportLevel 0 for none, 1 for per read (RR lines), 2 for per overlap (RR and RH lines) */
+{
+  int nRepeat = 0 ; /* number of repeat moshes */
+  Array olap = arrayCreate (256, Overlap) ;
+  arrayp(olap,0,Overlap)->nHit = 0 ; /* burn the 0 position */
+  int *omap = new0 (arrayMax(rs->reads), int) ; /* map from read2 id to index in olap */
+  U16 *hmap = new0 (rs->ms->max+1, U16) ; /* map from hashes to index in read1 hits */
+  int j, k ;	/* j is index in list of read hits, k is index over reads containing hxx */
+  Overlap *o ;
+  U32 *hx = x->hit ; U16 *dx = x->dx ;
+  U32 *xPos = new(x->nHit+1,U32) ; xPos[0] = 0 ; /* convert dx into absolute position NB +1 */
+  for (j = 0 ; j < x->nHit ; ++j, ++hx, ++dx)
+    { U32 hxx = *hx & TOPMASK ;
+      xPos[j+1] = xPos[j] + *dx ; /* j+1 not j because hmap[] below is j+1 */
+      if (msIsCopy1 (rs->ms, hxx))
+	{ if (hmap[hxx]) { ++nRepeat ; x->badRepeat = 1 ; continue ; }
+	  hmap[hxx] = j+1 ; /* note the +1 : needed to distinguish from missing */
+	  U32 *r2 = rs->inv[hxx] ;
+	  for (k = 0 ; k < rs->ms->depth[hxx] ; ++k, ++r2)
+	    { if (!omap[*r2])
+		{ o = arrayp(olap, omap[*r2] = arrayMax(olap), Overlap) ;
+		  o->iy = *r2 ;
+		}
+	      else o = arrp(olap, omap[*r2], Overlap) ;
+	      ++o->nHit ;
+	    }
+	}
+    }
+  free (omap) ;
+
+  /* now consider overlap for each read with at least 3 hits */
+  int nGood = 0, nBad = 0 ;
+  hx = x->hit ;
+  arraySort (olap, compareOverlap) ;
+  o = arrp(olap, 0, Overlap) ;
+  for (k = 1 ; k < arrayMax(olap) ; ++k, ++o) /* NB drop out of loop before reach end */
+    { if (o->nHit < 3) break ;
+      Read *y = arrp(rs->reads,o->iy,Read) ;
+      if (y->bad) continue ;
+      int nPlus = 0, nMinus = 0 ;
+      double d = 0.0, d2 = 0.0 ;
+      U16 ihx ;
+      U32 *hy = y->hit ;
+      for (j = 0 ; j < y->nHit ; ++j, ++hy) /* run through once to find direction */
+	if ((ihx = hmap[*hy & TOPMASK]))
+	  { if ((*hy & TOPBIT) == (hx[--ihx] & TOPBIT)) ++nPlus ; else ++nMinus ; }
+      o->isBad = FALSE ;
+      hy = y->hit ; /* reset hy for loop to come */
+      U16 *dy = y->dx ; double yPos = *dy ;
+      if (nPlus && !nMinus)
+	{ o->isPlus = TRUE ;
+	  int last = 0 ;
+	  for (j = 0 ; j < y->nHit ; ++j, ++hy, yPos += *++dy)
+	    if ((ihx = hmap[*hy & TOPMASK]))
+	      { if (ihx < last) { o->isBad = TRUE ; --nPlus ; } last = ihx ;
+		double z = xPos[ihx] - yPos ; d += z ; d2 += z*z ;
+	      }
+	}
+      else if (nMinus && !nPlus)
+	{ o->isPlus = FALSE ;
+	  int last = x->nHit ;
+	  for (j = 0 ; j < y->nHit ; ++j, ++hy, yPos += *++dy)
+	    if ((ihx = hmap[*hy & TOPMASK]))
+	      { if (ihx > last) { o->isBad = TRUE ; --nMinus ; } last = ihx ;
+		double z = xPos[ihx] + yPos ; d += z ; d2 += z*z ;
+	      }
+	}
+      if (nPlus && nMinus) o->isBad = TRUE ;
+      d /= o->nHit ; d2 = sqrt (d2 / o->nHit - d*d) ;
+      o->offset = d ;
+      if (o->isBad) ++nBad ; else ++nGood ;
+      
+      if (reportLevel > 1)
+	{ fprintf (outFile, "RH\t%u\tlen %d\t%s\tnPlus %d\tnMinus %d\t",
+		   o->iy, y->len, o->isBad ? "BAD" : "GOOD", nPlus, nMinus) ;
+	  fprintf (outFile, "offset %.1f\tsd %.1f\n", d, d2) ;
+	}
+    }
+  arrayMax(olap) = k ;
+  
+  if (!nGood && !nBad)
+    { x->badNoMatch = 1 ;
+      if (x->nHit < 10) x->badLowHit = 1 ;
+      else if (x->nCopy[1] < 10) x->badLowCopy1 = 1 ;
+    }
+
+  if (reportLevel > 0)
+    { I64 iix = x - arrp(rs->reads,0,Read) ;
+      if (iix < 0 || iix > arrayMax(rs->reads)) iix = 0 ; /* read not in readset */
+      U32 ix = iix ;
+      fprintf (outFile, "RR %6u\tlen %d\tnHit %3d\tnMiss %3d\t", ix, x->len, x->nHit, x->nMiss) ;
+      fprintf (outFile, "nCpy %d %d %d %d\t", x->nCopy[0], x->nCopy[1], x->nCopy[2], x->nCopy[3]);
+      fprintf (outFile, "nRepeatMosh %d\tnGood %4d\tnBad %4d\n", nRepeat, nGood, nBad) ;
+    }
+
+  free (hmap) ;
+  return olap ;
+}
+
+void printOverlap (Readset *rs, U32 ix, U32 iy)
+{
+  Read *x = arrp(rs->reads, ix, Read), *y = arrp(rs->reads, iy, Read) ;
+  fprintf (outFile, "RR overlaps_for %u\tlen %d\tnHit %d\tnMiss %d\tnCopy %d %d %d %d\n",
+	   ix, x->len, x->nHit, x->nMiss, x->nCopy[0], x->nCopy[1], x->nCopy[2], x->nCopy[3]) ;
+  fprintf (outFile, "RR overlaps_for %u\tlen %d\tnHit %d\tnMiss %d\tnCopy %d %d %d %d\n",
+	   iy, y->len, y->nHit, y->nMiss, y->nCopy[0], y->nCopy[1], y->nCopy[2], y->nCopy[3]) ;
+  int j, k ;	/* j is index in list of read 1 hits, k is index in list of read 2 hits */
+  int xPos = 0 ;
+  U32 *hx = x->hit ;
+  for (j = 0 ; j < x->nHit ; ++j)
+    { U32 hxx = *hx & TOPMASK ;
+      xPos += x->dx[j] ;
+      if (msIsCopy1 (rs->ms, hxx))
+	{ U32 *hy = y->hit ;
+	  int yPos = 0 ;
+	  for (k = 0 ; k < y->nHit ; ++k, ++hy)
+	    { U32 hyy = *hy & TOPMASK ;
+	      yPos += y->dx[0] ;
+	      if (hxx == hyy)
+		{ fprintf (outFile, "RO\t%8x %5d %c\t",
+			   hxx, rs->ms->depth[hxx], (*hx&TOPBIT) == (*hy&TOPBIT) ? '+' : '-') ;
+		  fprintf (outFile, "%u %u %c\t",
+			   ix, xPos, (*hx & TOPBIT) ? 'F' : 'R') ;
+		  fprintf (outFile, "%u %u %c\n",
+			   iy, yPos, (*hy & TOPBIT) ? 'F' : 'R') ;
+		}
+	    }
+	}
+    }
+}
+
+/************************************************************/
+
+/* mark bad reads based on one of a set of criteria
+   most complex is lack of consistent alignment to another read
+   complex because a priori it is not clear which of the two is bad
+   sort out in three phases: first egregious ones, which have many bad overlaps
+   then ones with multiple bad overlaps, then the remainder with just one
+*/
+
+int badOverlaps (Readset *rs, Read *x)
+{
+  int i, nBad = 0 ;
+  Array olap = findOverlaps (rs, x, 0) ;
+  for (i = 0 ; i < arrayMax(olap) ; ++i) if (arrp(olap,i,Overlap)->isBad) ++nBad ;
+  arrayDestroy (olap) ;
+  return nBad ;
+}
+
+void markBadReads (Readset *rs)
+{
+  int ix ;
+  Read *x, *x0 = arrp(rs->reads,0,Read) ;
+
+  for (ix = 0, x = x0 ; ix < arrayMax(rs->reads) ; ++ix, ++x)
+    x->bad = 0 ; /* initialise by clearing all bad flags */
+  
+  /* first pass through findOverlaps - set badOrder10 */
+  int nBad = 0 ;
+  for (ix = 0, x = x0 ; ix < arrayMax(rs->reads) ; ++ix, ++x)
+    if (badOverlaps (rs, x) >= 10) { x->badOrder10 = 1 ; ++nBad ; }
+  printf ("MB  %d with >=10 bad overlaps\n", nBad) ;
+
+  /* second pass, set badOrder1 for all 2 or more - will remove some more singleton errors */
+  nBad = 0 ;
+  for (ix = 0, x = x0 ; ix < arrayMax(rs->reads) ; ++ix, ++x)
+    if (badOverlaps (rs, x) > 1 && !x->badOrder10) { x->badOrder1 = 1 ; ++nBad ; }
+  printf ("MB  %d with multiple bad overlaps\n", nBad) ;
+
+  /* third pass, set badOrder1 for anything bad  - must be simple pairs - might be too harsh */
+  nBad = 0 ;
+  for (ix = 0, x = x0 ; ix < arrayMax(rs->reads) ; ++ix, ++x)
+    if (badOverlaps (rs, x) > 0 && !x->badOrder10) { x->badOrder1 = 1 ; ++nBad ; }
+  printf ("MB  %d with single bad overlaps\n", nBad) ;
+}
+
+
+/************************************************************/
+
+/* identify containing read with maximal number of hits 
+   could look for high hit:miss rate 
+   and expected:observed overlap hit count (to avoid phase switching) 
+*/
+
+void markContained (Readset *rs) 
+{
+  int ix, io ;
+  Read *x, *x0 = arrp(rs->reads,0,Read) ;
+  int nContained = 0, nNotContained = 0 ;
+  U64 totLen = 0 ;
+  Array overlaps = 0 ;
+  
+  for (ix = 0, x = x0 ; ix < arrayMax(rs->reads) ; ++ix, ++x)
+    { if (overlaps) { arrayDestroy (overlaps) ; overlaps = 0 ; }
+      if (x->bad) continue ;
+      overlaps = findOverlaps (rs, x, 0) ;
+      int maxHit = 0 ;
+      for (io = 0 ; io < arrayMax (overlaps) ; ++io)
+	{ Overlap *o = arrp(overlaps,io,Overlap) ;
+	  if (o->iy == ix) continue ; /* don't allow self-containment! */
+	  Read *y = arrp(rs->reads,o->iy,Read) ;
+	  if (y->len < x->len || o->nHit <= maxHit) continue ;
+	  if (o->isPlus && (o->offset > 0 || o->offset + y->len < x->len)) continue ;
+	  if (!o->isPlus && (o->offset < x->len || o->offset - y->len > 0)) continue ;
+	  x->contained = o->iy ; maxHit = o->nHit ;
+	}
+      if (x->contained) ++nContained ; else { ++nNotContained ; totLen += x->len ; }
+    }
+  printf ("MC  found %d contained reads, leaving %d not contained, av length %.1f\n",
+	  nContained, nNotContained, nNotContained ? totLen/(double)nNotContained : 0.) ;
+}
+
+/************************************************************/
+
+/* initial assembly strategy is to find all overlaps of a read, find all moshes in them, 
+   and put them in order, with estimated spacing, to make a new assemblyFragment, 
+   which is a type of consensus read
+*/
+
+typedef struct {
+  U32 hit ;
+  U32 count ;
+  int pos ;
+  int upCount ;			/* count of upstream hits  */
+  Array downHits ;		/* list of downstream hits */
+} AssemblyHit ;
+
+void assembleFromRead (Readset *rs, U32 ix)
+{
+  Read *x = arrp(rs->reads,ix,Read) ;
+  Read *z = new0 (1,Read) ;	/* build the assembly here */
+  int io, iy, ih ;
+
+  /* first collect all the hits in all the overlapping reads */
+  Array aHits = arrayCreate (1024, AssemblyHit) ;
+  AssemblyHit *ah ;
+  HASH  hitHash = hashCreate (1024) ;
+  Array overlaps = findOverlaps (rs, x, 1) ;
+  for (io = 0 ; io < arrayMax (overlaps) ; ++io)
+    { Overlap *o = arrp(overlaps,io,Overlap) ;
+      Read *y = arrp(rs->reads,o->iy,Read) ;
+      int yPos = 0 ;
+      Array lastDown = 0 ;
+      for (iy = 0 ; iy < y->nHit ; ++iy)
+	{ U32 hit = y->hit[iy] & TOPMASK ; yPos += y->dx[iy] ;
+	  ih = hashAdd (hitHash, HASH_INT(hit)) ;
+	  ah = arrayp(aHits,ih,AssemblyHit) ;
+	  if (!ah->count)
+	    { ah->hit = hit ;
+	      ah->downHits = arrayCreate (8, int) ;
+	    }
+	  ++ah->count ;
+	  if (iy) ++ah->upCount ;
+	  if (lastDown) array(lastDown, arrayMax(lastDown), int) = ih ;
+	  lastDown = ah->downHits ;
+	  if (o->isPlus) ah->pos += o->offset + yPos ;
+	  else ah->pos += o->offset - yPos ;
+	}
+    }
+
+  /* now want to select the longest clearly supported chain */
+  /* need a full chain because we want to rely on the order for future matches */
+
+  
+
+  /* reporting */
+  
+  double totCount = 0. ;
+  int i, j, countA[20][20], countB[20][20] ;
+  for (i = 20 ; i-- ;) for (j = 20 ; j-- ;) { countA[i][j] = 0 ; countB[i][j] = 0 ; }
+  for (ih = 1 ; ih < hashCount(hitHash) ; ++ih)
+    { ah = arrp(aHits,ih,AssemblyHit) ;
+      ah->pos /= ah->count ;	/* just an estimate for now */
+      totCount += ah->count ;
+      if (!msIsCopy1 (rs->ms, ah->hit)) continue ;
+      i = ah->count ; if (i > 19) i = 19 ;
+      j = rs->ms->depth[ah->hit] ; if (j > 19) j = 19 ; ++countA[i][j] ;
+      j = (10*ah->count - 1) / rs->ms->depth[ah->hit] ; ++countB[i][j] ;
+    }
+  totCount /= hashCount(hitHash) ;
+  printf ("AR  %d total hits - mean count %.1f\n", hashCount(hitHash), totCount) ;
+  for (i = 0 ; i < 20 ; ++i)
+    { printf ("AH  %2d\t", i) ;
+      for (j = 0 ; j < 20 ; ++j) if (j < i) printf ("    ") ; else printf ("%4d", countA[i][j]) ;
+      printf ("    ") ;
+      for (j = 0 ; j < 10 ; ++j) printf ("%4d", countB[i][j]) ;
+      printf ("\n") ;
+    }
+
+  hashDestroy (hitHash) ;
+  arrayDestroy (aHits) ;
+  arrayDestroy (overlaps) ;
 }
 
 /************************************************************/
@@ -230,7 +591,12 @@ void usage (void)
   fprintf (stderr, "  -w | --write <file stem> : writes assembly files\n") ;
   fprintf (stderr, "  -r | --read <file stem> : read assembly files\n") ;
   fprintf (stderr, "  -S | --stats : give readset stats\n") ;
-  fprintf (stderr, "  -a1 | --assembly1 : find maximal overlaps / containments &\n") ;
+  fprintf (stderr, "  -o1 | --overlap1 <read> : find overlaps for given read\n") ;
+  fprintf (stderr, "  -o2 | --overlap2 <k> : give overlap stats for every k'th read\n") ;
+  fprintf (stderr, "  -o3 | --overlap3 <read1> <read2> : print details of overlap\n") ;
+  fprintf (stderr, "  -b | --markBadReads : identify and categorise bad reads\n") ;
+  fprintf (stderr, "  -c | --markContained : identify contained reads\n") ;
+  fprintf (stderr, "  -a1 | --assemble1 <read> : assemble starting from given read\n") ;
 }
 
 int main (int argc, char *argv[])
@@ -283,15 +649,17 @@ int main (int argc, char *argv[])
       { if (!(f = fopen (argv[-1], "r"))) die ("failed to open mosh file %s", argv[-1]) ;
 	if (ms) moshsetDestroy (ms) ;
 	ms = moshsetRead (f) ;
+	if (ms->max >= TOPBIT) die ("too many entries in moshset") ;
+	moshsetSummary (ms, outFile) ;
       }
     else if (ARGMATCH("-f","--seqfile",2))
       { if (ms)
 	  { if (rs) readsetDestroy (rs) ;
-	    rs = readsetCreate (ms) ;
+	    rs = readsetCreate (ms, 1<<16) ;
 	    readsetFileRead (rs, argv[-1]) ;
 	    fclose (f) ;
 	  }
-	else fprintf (stderr, "** need to read a moshset before a fasta file\n") ;
+	else fprintf (stderr, "** need to read a moshset before a sequence file\n") ;
       }
     else if (ARGMATCH("-r","--read",2))
       { if (rs) readsetDestroy (rs) ;
@@ -299,7 +667,24 @@ int main (int argc, char *argv[])
       }
     else if (ARGMATCH("-w","--write",2))
       readsetWrite (rs, argv[-1]) ;
-    else if (ARGMATCH("-S","--stats",1)) readsetStats (rs) ;
+    else if (ARGMATCH("-S","--stats",1))
+      readsetStats (rs) ;
+    else if (ARGMATCH("-o1","--overlaps1",2))
+      { Array a = findOverlaps (rs, arrp(rs->reads,(U32)atoi(argv[-1]), Read), 2) ;
+	arrayDestroy (a) ;
+      }
+    else if (ARGMATCH("-o2","--overlaps2",2))
+      { int d = atoi(argv[-1]) ;
+	U32 ix ;
+	Array a ;
+	for (ix = d ; ix < arrayMax(rs->reads) ; ix += d)
+	  { a = findOverlaps (rs, arrp(rs->reads,ix,Read), 1) ; arrayDestroy (a) ; }
+      }
+    else if (ARGMATCH("-o3","--overlap",3))
+      printOverlap (rs, (U32)atoi(argv[-2]), (U32)atoi(argv[-1])) ;
+    else if (ARGMATCH("-b","--markBadReads",1)) markBadReads (rs) ;
+    else if (ARGMATCH("-c","--markContained",1)) markContained (rs) ;
+    else if (ARGMATCH("-a1","--assemble1",2)) assembleFromRead (rs, (U32)atoi(argv[-1])) ;
     else die ("unkown command %s - run without arguments for usage", *argv) ;
 
     timeUpdate (outFile) ;
