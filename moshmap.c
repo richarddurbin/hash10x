@@ -5,7 +5,7 @@
  * Description:
  * Exported functions:
  * HISTORY:
- * Last edited: Nov  7 13:21 2018 (rd109)
+ * Last edited: Dec 27 17:17 2018 (rd109)
  * Created: Sat Oct 27 20:37:44 2018 (rd109)
  *-------------------------------------------------------------------
  */
@@ -103,7 +103,7 @@ void referenceFastaRead (Reference *ref, FILE *f, BOOL isAdd)
       totLen += len ;
       SeqhashRCiterator *mi = moshRCiterator (ref->ms->hasher, seq, len) ;
       U64 hash ; int pos ;
-      while (moshRCnext (mi, &hash, &pos))
+      while (moshRCnext (mi, &hash, &pos, 0))
 	{ U32 index = moshsetIndexFind (ref->ms, hash, isAdd) ;
 	  if (index)
 	    { if (ref->max+1 >= ref->size) die ("reference size overflow") ;
@@ -196,7 +196,7 @@ void queryProcess (Reference *ref, FILE *f)
       U64 hash ; int pos ;
       seeds = arrayReCreate (seeds, 1024, Seed) ;
       int missed = 0, copy[4] ; copy[1] = copy[2] = copy[3] = 0 ;
-      while (moshRCnext (mi, &hash, &pos))
+      while (moshRCnext (mi, &hash, &pos, 0))
 	{ U32 index = moshsetIndexFind (ref->ms, hash, FALSE) ;
 	  Seed *s = arrayp(seeds,arrayMax(seeds),Seed) ;
 	  s->index = index ; s->pos = pos ;
