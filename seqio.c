@@ -5,7 +5,7 @@
  * Description: buffered package to read arbitrary sequence files - much faster than readseq
  * Exported functions:
  * HISTORY:
- * Last edited: Nov 17 16:47 2018 (rd109)
+ * Last edited: Dec 27 11:15 2018 (rd109)
  * Created: Fri Nov  9 00:21:21 2018 (rd109)
  *-------------------------------------------------------------------
  */
@@ -15,7 +15,9 @@
 SeqIO *seqIOopen (char *filename, int* convert, BOOL isQual)
 {
   SeqIO *si = new0 (1, SeqIO) ;
-  si->f = gzopen (filename, "r") ; if (!si->f) { free(si) ; return 0 ; }
+  if (!strcmp (filename, "-")) si->f = gzdopen (fileno (stdin), "r") ;
+  else si->f = gzopen (filename, "r") ;
+  if (!si->f) { free(si) ; return 0 ; }
   si->bufSize = 1<<24 ;
   si->b = si->buf = new (si->bufSize, char) ;
   si->convert = convert ;

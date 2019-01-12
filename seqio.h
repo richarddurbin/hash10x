@@ -5,7 +5,7 @@
  * Description:
  * Exported functions:
  * HISTORY:
- * Last edited: Nov 12 21:01 2018 (rd109)
+ * Last edited: Dec 27 11:21 2018 (rd109)
  * Created: Sat Nov 10 08:51:49 2018 (rd109)
  *-------------------------------------------------------------------
  */
@@ -39,7 +39,7 @@ typedef struct {
 /* Add 0 terminators to ids.  Convert sequences in place if convert != 0, and quals if isQual. */
 /* Potential for future storage of (packed?) sequences with counts up front. */ 
 
-SeqIO *seqIOopen (char *filename, int* convert, BOOL isQual) ;
+SeqIO *seqIOopen (char *filename, int* convert, BOOL isQual) ; /* can use "-" for stdin */
 BOOL seqIOread (SeqIO *si) ;
 void seqIOclose (SeqIO *si) ;
 #define sqioId(si)   ((si)->buf+(si)->idStart)
