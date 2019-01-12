@@ -5,7 +5,7 @@
  * Description: package to handle sets of "mosh" sequence hashes
  * Exported functions:
  * HISTORY:
- * Last edited: Jan 12 13:13 2019 (rd109)
+ * Last edited: Jan 12 13:22 2019 (rd109)
  * Created: Tue Nov  6 17:31:14 2018 (rd109)
  *-------------------------------------------------------------------
  */
@@ -21,7 +21,7 @@ Moshset *moshsetCreate (Seqhash *sh, int bits, U32 size)
   ms->tableSize = (U64)1 << ms->tableBits ;
   ms->tableMask = ms->tableSize - 1 ;
   ms->index = new0 (ms->tableSize, U32) ;
-  if (size >= (ms->tableSize >> 2)) die ("Moshset size %lld is too big for %d bits", size, bits) ;
+  if (size >= (ms->tableSize >> 2)) die ("Moshset size %u is too big for %d bits", size, bits) ;
   else if (size) ms->size = size ;
   else ms->size = (ms->tableSize >> 2) - 1 ;
   ms->value = new (ms->size, U64) ;
@@ -35,10 +35,10 @@ void moshsetDestroy (Moshset *ms)
 
 BOOL moshsetPack (Moshset *ms)	/* compress per-item arrays */
 { if (ms->size == ms->max+1) return FALSE ;
-  ms->size = ms->max+1 ;
   resize (ms->value, ms->size, ms->max+1, U64) ;
   resize (ms->depth, ms->size, ms->max+1, U16) ;
   resize (ms->info, ms->size, ms->max+1, U8) ;
+  ms->size = ms->max+1 ;
   return TRUE ;
 }
 
@@ -54,7 +54,7 @@ U32 moshsetIndexFind (Moshset *ms, U64 hash, int isAdd)
     }
   if (!index && isAdd)
     { index = ms->index[offset] = ++ms->max ;
-      if (ms->max >= ms->size) die ("hashTableSize is too small") ;
+      if (ms->max >= ms->size) die ("hashTableSize %u is too small for %u", ms->size, ms->max) ;
       ms->value[index] = hash ;
     }
   return index ;
