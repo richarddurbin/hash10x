@@ -5,7 +5,7 @@
  * Description: package to handle sets of "mosh" sequence hashes
  * Exported functions:
  * HISTORY:
- * Last edited: Jan  2 21:50 2019 (rd109)
+ * Last edited: Jan 12 13:13 2019 (rd109)
  * Created: Tue Nov  6 17:31:14 2018 (rd109)
  *-------------------------------------------------------------------
  */
@@ -36,9 +36,9 @@ void moshsetDestroy (Moshset *ms)
 BOOL moshsetPack (Moshset *ms)	/* compress per-item arrays */
 { if (ms->size == ms->max+1) return FALSE ;
   ms->size = ms->max+1 ;
-  resize (ms->value, ms->size, U64) ;
-  resize (ms->depth, ms->size, U16) ;
-  resize (ms->info, ms->size, U8) ;
+  resize (ms->value, ms->size, ms->max+1, U64) ;
+  resize (ms->depth, ms->size, ms->max+1, U16) ;
+  resize (ms->info, ms->size, ms->max+1, U8) ;
   return TRUE ;
 }
 

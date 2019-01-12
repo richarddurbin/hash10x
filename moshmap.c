@@ -5,7 +5,7 @@
  * Description:
  * Exported functions:
  * HISTORY:
- * Last edited: Dec 27 17:17 2018 (rd109)
+ * Last edited: Jan 12 13:11 2019 (rd109)
  * Created: Sat Oct 27 20:37:44 2018 (rd109)
  *-------------------------------------------------------------------
  */
@@ -72,10 +72,10 @@ void referenceDestroy (Reference *ref)
 
 void referencePack (Reference *ref)
 {
-  resize (ref->depth, ref->ms->max, U32) ;
-  resize (ref->index, ref->max, U32) ;
-  resize (ref->offset, ref->max, U32) ;
-  resize (ref->id, ref->max, U32) ;
+  resize (ref->depth, ref->ms->size, ref->ms->max+1, U32) ;
+  resize (ref->index, ref->size, ref->max, U32) ;
+  resize (ref->offset, ref->size, ref->max, U32) ;
+  resize (ref->id, ref->size, ref->max, U32) ;
   ref->size = ref->max ;
   
   ref->rev = new (ref->size, U32) ;			/* now build rev and loc */
