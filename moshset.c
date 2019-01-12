@@ -5,7 +5,7 @@
  * Description: package to handle sets of "mosh" sequence hashes
  * Exported functions:
  * HISTORY:
- * Last edited: Nov 18 08:58 2018 (rd109)
+ * Last edited: Jan  2 21:50 2019 (rd109)
  * Created: Tue Nov  6 17:31:14 2018 (rd109)
  *-------------------------------------------------------------------
  */
@@ -18,7 +18,7 @@ Moshset *moshsetCreate (Seqhash *sh, int bits, U32 size)
   Moshset *ms = new0 (1, Moshset) ;
   ms->hasher = sh ;
   ms->tableBits = bits ;
-  ms->tableSize = 1 << ms->tableBits ;
+  ms->tableSize = (U64)1 << ms->tableBits ;
   ms->tableMask = ms->tableSize - 1 ;
   ms->index = new0 (ms->tableSize, U32) ;
   if (size >= (ms->tableSize >> 2)) die ("Moshset size %lld is too big for %d bits", size, bits) ;
@@ -75,16 +75,6 @@ void moshsetDepthPrune (Moshset *ms, int min, int max)
 	   N, ms->max, min, max) ;
 }
 
-void moshsetDepthSetCopy (Moshset *ms, int copy1min, int copy2min, int copyMmin)
-{
-  U32 i ;
-  for (i = 1 ; i <= ms->max ; ++i)
-    if (ms->depth[i] < copy1min) msSetCopy0(ms,i) ;
-    else if (ms->depth[i] < copy2min) msSetCopy1(ms,i) ;
-    else if (ms->depth[i] < copyMmin) msSetCopy2(ms,i) ;
-    else msSetCopyM(ms,i) ;
-}
-
 void moshsetWrite (Moshset *ms, FILE *f)
 { if (fwrite ("MSHSTv1",8,1,f) != 1) die ("failed to write moshset header") ;
   if (fwrite (&ms->tableBits,sizeof(int),1,f) != 1) die ("failed to write bits") ;
@@ -131,6 +121,7 @@ BOOL moshsetMerge (Moshset *ms1, Moshset *ms2)
 
 void moshsetSummary (Moshset *ms, FILE *f)
 {
+  seqhashReport (ms->hasher, f) ;
   fprintf (f, "MS table size %llu number of entries %u", ms->tableSize, ms->max) ;
   if (!ms->max) return ;
   U32 i, copy[4] ; copy[0] = copy[1] = copy[2] = copy[3] = 0 ;
@@ -140,10 +131,10 @@ void moshsetSummary (Moshset *ms, FILE *f)
       else ++array(h,ms->depth[i],U32) ;
       ++copy[msCopy(ms,i)] ;
     }
-  U64 sum = 0, tot = 0, ptot = 0 ;
+  U64 sum = 0, tot = 0 ;
   for (i = 0 ; i < arrayMax(h) ; ++i) { sum += arr(h,i,U32) ; tot += i * arr(h,i,U32) ; }
-  ptot = tot / 2 ;
-  for (i = 0 ; i < arrayMax(h) ; ++i) if ((ptot -= i*arr(h,i,U32)) < 0) break ;
+  I64 htot = tot / 2 ;
+  for (i = 0 ; i < arrayMax(h) ; ++i) { htot -= i*arr(h,i,U32) ; if (htot < 0) break ; }
   fprintf (f, " total count %llu\nMS average depth %.1f N50 depth %u",
 	   tot, tot / (double)sum , i) ;
   if (copy[0] < ms->max)

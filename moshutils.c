@@ -5,7 +5,7 @@
  * Description:
  * Exported functions:
  * HISTORY:
- * Last edited: Nov 18 08:52 2018 (rd109)
+ * Last edited: Jan  2 22:00 2019 (rd109)
  * Created: Wed Nov 14 22:31:47 2018 (rd109)
  *-------------------------------------------------------------------
  */
@@ -21,7 +21,7 @@ static int addSequence (Moshset *ms, char *s, int len) /* return number of hashe
   int nHash = 0 ;
   SeqhashRCiterator *mi = moshRCiterator (ms->hasher, s, len) ;
   U64 hash ; int pos ;
-  while (moshRCnext (mi, &hash, &pos))
+  while (moshRCnext (mi, &hash, &pos, 0))
     { U32 index = moshsetIndexFind (ms, hash, TRUE) ;
       U16 *di = &ms->depth[index] ; ++*di ; if (!*di) *di = U16MAX ;
       ++nHash ;
@@ -87,7 +87,8 @@ void usage (void)
   fprintf (stderr, "  -x | --add10x <10x read file> : add kmers from 10x read file\n") ;
   fprintf (stderr, "  -m | --merge <mosh file> : add kmers from read file; writes depths\n") ;
   fprintf (stderr, "  -p | --prune <min> <max> : remove mosh entries < min or >= max\n") ;
-  fprintf (stderr, "  -s | --setcopy <copy1min> <copy2min> <copyMmin> : set mosh copy\n") ;
+  fprintf (stderr, "  -s | --setcopy <copy1min> <copy2min> <copyMmin> : reset mosh copy\n") ;
+  fprintf (stderr, "  -sM | --setcopyM <copyMmin> : set copyM if depth > copyMmin\n") ;
   fprintf (stderr, "  -H | --hist : print depth histogram\n") ;
   fprintf (stderr, "  -d | --depth <mosh file>* : print depth per mosh [also in other files]\n") ;
   fprintf (stderr, "command -c or -r must come before other commands from -w onwards\n") ;
@@ -154,11 +155,12 @@ int main (int argc, char *argv[])
       { if (!(f = fopen (argv[-1], "r"))) die ("failed to open mosh file %s", argv[-1]) ;
 	ms = moshsetRead (f) ;
 	fclose (f) ;
+	seqhashReport (ms->hasher, outFile) ;
 	moshsetSummary (ms, outFile) ;
       }
     else if (ms && ARGMATCH("-w","--write",2))
       { if (!(f = fopen (argv[-1], "w"))) die ("failed to open mosh file %s", argv[-1]) ;
-	moshsetWrite (ms, outFile) ;
+	moshsetWrite (ms, f) ;
 	fclose (f) ;
       }
     else if (ms && ARGMATCH("-p","--prune",3))
@@ -166,7 +168,19 @@ int main (int argc, char *argv[])
 	moshsetSummary (ms, outFile) ;
       }
     else if (ms && ARGMATCH("-s","--setcopy",4))
-      { moshsetDepthSetCopy (ms, atoi(argv[-3]), atoi(argv[-2]), atoi(argv[-1])) ;
+      { int copy1min = atoi(argv[-3]), copy2min = atoi(argv[-2]), copyMmin = atoi(argv[-1]) ;
+	U32 u ;
+	for (u = 1 ; u <= ms->max ; ++u)
+	  if (ms->depth[u] < copy1min) msSetCopy0(ms,u) ;
+	  else if (ms->depth[u] < copy2min) msSetCopy1(ms,u) ;
+	  else if (ms->depth[u] < copyMmin) msSetCopy2(ms,u) ;
+	  else msSetCopyM(ms,u) ;
+
+	moshsetSummary (ms, outFile) ;
+      }
+    else if (ms && ARGMATCH("-sM","--setcopyM",2))
+      { int copyMmin = atoi(argv[-1]) ;
+	U32 u ; for (u = 1 ; u <= ms->max ; ++u) if (ms->depth[u] >= copyMmin) msSetCopyM(ms,u) ;
 	moshsetSummary (ms, outFile) ;
       }
     else if (ms && ARGMATCH("-a","--add",2))

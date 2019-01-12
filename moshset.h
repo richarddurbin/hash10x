@@ -5,7 +5,7 @@
  * Description:
  * Exported functions:
  * HISTORY:
- * Last edited: Nov 18 08:49 2018 (rd109)
+ * Last edited: Jan 12 12:55 2019 (rd109)
  * Created: Tue Nov  6 17:31:35 2018 (rd109)
  *-------------------------------------------------------------------
  */
@@ -39,7 +39,6 @@ U32 moshsetIndexFind (Moshset *ms, U64 hash, int isAdd) ;
 void moshsetSummary (Moshset *ms, FILE *f) ;
 BOOL moshsetPack (Moshset *ms)	; /* reduce size to max+1 and compress value; TRUE if changes */
 void moshsetDepthPrune (Moshset *ms, int min, int max) ;
-void moshsetDepthSetCopy (Moshset *ms, int copy1min, int copy2min, int copyMmin) ;
 BOOL moshsetMerge (Moshset *ms1, Moshset *ms2) ;
 
 /* info fields */
