@@ -8,7 +8,7 @@
     can evaluate with crib built from external fasta files
  * Exported functions:
  * HISTORY:
- * Last edited: Nov  6 17:16 2018 (rd109)
+ * Last edited: Dec 27 17:15 2018 (rd109)
  * Created: Mon Mar  5 11:38:47 2018 (rd)
  *-------------------------------------------------------------------
  */
@@ -124,7 +124,7 @@ void seqAddHashes (char *s, int len, Array a, int readCount)
 {
   SeqhashRCiterator *mi = moshRCiterator (hasher, s, len) ;
   U64 hash ; int pos ;
-  while (moshRCnext (mi, &hash, &pos))
+  while (moshRCnext (mi, &hash, &pos, 0))
     { HashTemp *h = arrayp(a,arrayMax(a),HashTemp) ;
       h->hash = hash ; h->read = readCount ; h->pos = pos ;
     }
@@ -436,7 +436,7 @@ static void cribAddGenome (FILE *f, CribInfo *crib)
     { SeqhashRCiterator *mi = moshRCiterator (hasher, seq, len) ;
       U64 hash ; int pos ;
       ++chr ; if (chr >= cribChrMax) cribChrMax = chr+1 ;
-      while (moshRCnext (mi, &hash, &pos))
+      while (moshRCnext (mi, &hash, &pos, 0))
 	if ((index = hashIndexFind (hash, FALSE)))
 	  { CribInfo *c = &crib[index] ;
 	    if (!c->chr) { c->chr = chr ; c->pos = pos >> 10 ; }

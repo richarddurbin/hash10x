@@ -7,7 +7,7 @@
 	see test main() at end for standard usage pattern
  * Exported functions: see seqhash.h
  * HISTORY:
- * Last edited: Nov  7 13:48 2018 (rd109)
+ * Last edited: Dec 27 18:16 2018 (rd109)
  * Created: Sat Feb 24 19:20:18 2018 (rd)
  *-------------------------------------------------------------------
  */
@@ -58,21 +58,22 @@ void seqhashReport (Seqhash *sh, FILE *f)
 static inline U64 hashFunc (U64 x, Seqhash *sh)
 { return ((x * sh->factor1) >> sh->shift1) ; } // + ((x * sh->factor2) >> sh->shift2) ; }
 
-static inline U64 hashRC (SeqhashRCiterator *mi)
+static inline U64 hashRC (SeqhashRCiterator *mi, BOOL *isForward)
 { U64 hashF = hashFunc (mi->h, mi->sh) ;
   U64 hashR = hashFunc (mi->hRC, mi->sh) ;
 #ifdef DEBUG
   printf ("hashRC: h %lx hRC %lx hashF %lx hashR %lx\n", mi->h, mi->hRC, hashF, hashR) ;
 #endif
-  if (hashF < hashR) return hashF ; else return hashR ;
+  if (hashF < hashR) { *isForward = TRUE ; return hashF ; }
+  else { *isForward = FALSE ; return hashR ; }
 }
 
-static inline U64 advanceHashRC (SeqhashRCiterator *mi)
+static inline U64 advanceHashRC (SeqhashRCiterator *mi, BOOL *isForward)
 { Seqhash *sh = mi->sh ;
   if (mi->s < mi->sEnd)
     { mi->h = ((mi->h << 2) & sh->mask) | *(mi->s) ;
       mi->hRC = (mi->hRC >> 2) | sh->patternRC[*(mi->s)] ;
-      return hashRC (mi) ;
+      return hashRC (mi, isForward) ;
     }
   else
     return U64MAX ;
@@ -86,7 +87,8 @@ SeqhashRCiterator *minimizerRCiterator (Seqhash *sh, char *s, int len)
   SeqhashRCiterator *mi = (SeqhashRCiterator*) mycalloc (sizeof(SeqhashRCiterator), 1) ;
   mi->sh = sh ;
   mi->s = s ; mi->sEnd = s + len ;
-  mi->hashBuf = (U64*) myalloc (sh->w * sizeof(U64)) ;
+  mi->hashBuf = new0 (sh->w, U64) ;
+  mi->fBuf = new0 (sh->w, BOOL) ;
   if (len < sh->k) { mi->isDone = TRUE ; return mi ; } /* edge case */
 
   int i ;			/* preinitialise the hashes for the first kmer */
@@ -96,17 +98,17 @@ SeqhashRCiterator *minimizerRCiterator (Seqhash *sh, char *s, int len)
     }
   
   /* store first w hashes in hashBuf and set ->iMin */
-  U64 min = hashRC (mi) ;
+  U64 min = hashRC (mi, mi->fBuf) ;
   mi->iMin = 0 ;
   for (i = 1 ; i < sh->w ; ++i, ++mi->s)
-    { mi->hashBuf[i] = advanceHashRC (mi) ;
+    { mi->hashBuf[i] = advanceHashRC (mi, &mi->fBuf[i]) ;
       if (mi->hashBuf[i] < min) { min = mi->hashBuf[i] ; mi->iMin = i ; }
     }
 
   return mi ;
 }
 
-BOOL minimizerRCnext (SeqhashRCiterator *mi, U64 *u, int *pos) /* returns (u, pos) */
+BOOL minimizerRCnext (SeqhashRCiterator *mi, U64 *u, int *pos, BOOL *isF) /* returns u,pos,isF */
 {
   if (mi->isDone) return FALSE ; /* we are done */
 
@@ -118,17 +120,20 @@ BOOL minimizerRCnext (SeqhashRCiterator *mi, U64 *u, int *pos) /* returns (u, po
 
   assert (u && pos) ;
   *pos = mi->base + mi->iMin ; if (mi->iMin < mi->iStart) *pos += mi->sh->w ;
-  *u = mi->hashBuf[mi->iMin] ;
+  *u = mi->hashBuf[mi->iMin] ; if (isF) *isF = mi->fBuf[mi->iMin] ;
   if (mi->s >= mi->sEnd) { mi->isDone = TRUE ; return TRUE ; }
 
   int i ;	    		/* next update hashBuf splitting into two cases */
   U64 min = *u ;    /* save this here for end case - see below */
   if (mi->iMin >= mi->iStart)
-    for (i = mi->iStart ; i <= mi->iMin ; ++i, ++mi->s) mi->hashBuf[i] = advanceHashRC (mi) ;
+    for (i = mi->iStart ; i <= mi->iMin ; ++i, ++mi->s)
+      mi->hashBuf[i] = advanceHashRC (mi, &mi->fBuf[i]) ;
   else
-    { for (i = mi->iStart ; i < mi->sh->w ; ++i, ++mi->s) mi->hashBuf[i] = advanceHashRC (mi) ;
+    { for (i = mi->iStart ; i < mi->sh->w ; ++i, ++mi->s)
+	mi->hashBuf[i] = advanceHashRC (mi, &mi->fBuf[i]) ;
       mi->base += mi->sh->w ;
-      for (i = 0 ; i <= mi->iMin ; ++i, ++mi->s) mi->hashBuf[i] = advanceHashRC (mi) ;
+      for (i = 0 ; i <= mi->iMin ; ++i, ++mi->s)
+	mi->hashBuf[i] = advanceHashRC (mi, &mi->fBuf[i]) ;
     }
   mi->iStart = mi->iMin + 1 ;
   if (mi->iStart == mi->sh->w) { mi->iStart = 0 ; mi->base += mi->sh->w ; }
@@ -152,7 +157,8 @@ SeqhashRCiterator *moshRCiterator (Seqhash *sh, char *s, int len)
   SeqhashRCiterator *mi = (SeqhashRCiterator*) mycalloc (sizeof(SeqhashRCiterator), 1) ;
   mi->sh = sh ;
   mi->s = s ; mi->sEnd = s + len ;
-  mi->hashBuf = (U64*) myalloc (sh->w * sizeof(U64)) ;
+  mi->hashBuf = new0 (sh->w, U64) ;
+  mi->fBuf = new0 (sh->w, BOOL) ;
   if (len < sh->k) { mi->isDone = TRUE ; return mi ; } /* edge case */
 
   int i ;			/* preinitialise the hashes for the first kmer */
@@ -161,27 +167,27 @@ SeqhashRCiterator *moshRCiterator (Seqhash *sh, char *s, int len)
       mi->hRC = (mi->hRC >> 2) | sh->patternRC[*(mi->s)] ;
     }
   
-  U64 hash = hashRC(mi) ;
+  U64 hash = hashRC(mi, mi->fBuf) ;
   while ((hash % sh->w) && mi->s < mi->sEnd)
-    { hash = advanceHashRC (mi) ; ++mi->iMin ; ++mi->s ; }
+    { hash = advanceHashRC (mi, mi->fBuf) ; ++mi->iMin ; ++mi->s ; }
   if (!(hash % sh->w)) *mi->hashBuf = hash ;
   else mi->isDone = TRUE ;
 
   return mi ;
 }
 
-BOOL moshRCnext (SeqhashRCiterator *mi, U64 *u, int *pos) /* returns (u, pos) */
+BOOL moshRCnext (SeqhashRCiterator *mi, U64 *u, int *pos, BOOL *isF) /* returns (u, pos, isF) */
 {
   if (mi->isDone) return FALSE ; /* we are done */
 
-  *u = *mi->hashBuf ; *pos = mi->iMin ;
+  *u = *mi->hashBuf ; *pos = mi->iMin ; if (isF) *isF = *mi->fBuf ;
 
   if (mi->s >= mi->sEnd) { mi->isDone = TRUE ; return TRUE ; }
     
-  U64 hash = advanceHashRC (mi) ; ++mi->iMin ; ++mi->s ;
+  U64 hash = advanceHashRC (mi, mi->fBuf) ; ++mi->iMin ; ++mi->s ;
   int w = mi->sh->w ;
   while ((hash % w) && mi->s < mi->sEnd)
-    { hash = advanceHashRC (mi) ; ++mi->iMin ; ++mi->s ; }
+    { hash = advanceHashRC (mi, mi->fBuf) ; ++mi->iMin ; ++mi->s ; }
   if (!(hash % w)) *mi->hashBuf = hash ;
   else mi->isDone = TRUE ;
 
@@ -192,21 +198,24 @@ BOOL moshRCnext (SeqhashRCiterator *mi, U64 *u, int *pos) /* returns (u, pos) */
 
 #ifdef TEST
 
-#include "readseq.h"
+#include "seqio.h"
 
 int main (int argc, char *argv[])
 {
   char *seq, *id ;
   int len ;
-  U64 u ; int pos ;
+  U64 u ; int pos ; BOOL isF ;
+
+  SeqIO *sio = seqIOopen ("-", dna2indexConv, 0) ;
   
   Seqhash *sh = seqhashCreate (16,32) ;
-  while (readSequence (stdin, dna2indexConv, &seq, &id, 0, &len))
-    { printf ("\nread sequence %s length %d\n", id, len) ;
-      SeqhashRCiterator *si = moshRCiterator (sh, seq, len) ;
-      while (moshRCnext (si, &u, &pos)) printf ("\t%08lx\t%d\n", u, pos) ;
+  while (seqIOread (sio))
+    { printf ("\nread sequence %s length %d\n", sqioId(sio), sio->seqLen) ;
+      SeqhashRCiterator *si = moshRCiterator (sh, sqioSeq(sio), sio->seqLen) ;
+      while (moshRCnext (si, &u, &pos, &isF)) printf ("\t%08lx\t%d\t%c\n", u, pos, isF?'F':'R') ;
       seqhashRCiteratorDestroy (si) ;
     }
+  seqIOclose (sio) ;
 }
 
 #endif
