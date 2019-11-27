@@ -8,7 +8,7 @@
     can evaluate with crib built from external fasta files
  * Exported functions:
  * HISTORY:
- * Last edited: Dec 27 17:15 2018 (rd109)
+ * Last edited: Nov 27 17:44 2019 (rd109)
  * Created: Mon Mar  5 11:38:47 2018 (rd)
  *-------------------------------------------------------------------
  */
@@ -138,7 +138,6 @@ int compareHashTemp (const void *a, const void *b)
 
 static inline U32 hashIndexFind (U64 hash, int isAdd)
 {
-  static int nIndex = 0 ;
   U32 index ;
   U64 offset = hash & hashTableMask ;
   U64 diff = ((hash >> hashTableBits) & hashTableMask) | 1 ; /* odd number so coprime to size */
@@ -147,8 +146,7 @@ static inline U32 hashIndexFind (U64 hash, int isAdd)
   if (!index && isAdd)
     { index = hashIndex[offset] = hashNumber++ ;
       hashValue[index] = hash ;
-      if ((++nIndex << 2) > hashTableSize) die ("hashTableSize is too small") ;
-      // Alex changed this to be ((++nIndex << 1) > hashTableSize) (and nIndex to be unsigned 32)
+      if (hashNumber > (hashTableSize >> 2)-2) die ("hashTableSize is too small") ;
     }
   return index ;
 }
@@ -250,7 +248,7 @@ void writeHashFile (FILE *f)
       (fwrite (&hashTableBits, 4, 1, f) != 1)) die ("write fail 1") ;
   if (fwrite (hashIndex, sizeof(U32), hashTableSize, f) != hashTableSize) die ("write fail 2") ;
   if (fwrite (&hashNumber, sizeof(U32), 1, f) != 1) die ("failed to write hashNumber") ;
-  if (fwrite (hashValue, sizeof(U64), hashNumber, f)) die ("failed to write hashValue") ;
+  if (fwrite (hashValue, sizeof(U64), hashNumber, f) != hashNumber) die ("failed to write hashValue") ;
   
   if (!arrayWrite (hashDepth, f)) die ("failed to write hashDepth array") ;
   if (!arrayWrite (clusterBlocks, f)) die ("failed to write clusterBlocks array") ;
@@ -294,7 +292,7 @@ void readHashFile (FILE *f)
     }
   else if (version == 2)
     { if (fread (&hashNumber, sizeof(U32), 1, f) != 1) die ("failed to read hashNumber") ;
-      if (fread (hashValue, sizeof(U64), hashNumber, f)) die ("failed to read hashValue") ;
+      if (fread (hashValue, sizeof(U64), hashNumber, f) != hashNumber) die ("failed to read hashValue") ;
     }
 
   if (!(hashDepth = arrayRead (f))) die ("failed to read hashDepth array") ;
